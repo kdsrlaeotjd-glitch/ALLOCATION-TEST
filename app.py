@@ -9,12 +9,12 @@ import warnings
 import urllib.request
 import urllib.parse
 from zoneinfo import ZoneInfo
-import xlwt  # 💡 [핵심] 파이썬을 거치지 않고 xlwt 기계를 직접 사용합니다!
+import xlwt
 
 warnings.filterwarnings('ignore', category=UserWarning, module='openpyxl')
 
 # ==========================================================
-# 0. 구글 시트 통신 및 진짜 .xls 파일 수동 생성 엔진 🤖
+# 0. 구글 시트 통신 및 진짜 .xls 파일 생성 엔진 🤖
 # ==========================================================
 def load_from_cloud():
     try:
@@ -65,26 +65,19 @@ def save_to_cloud():
     except Exception:
         return False
 
-# 💡 [치명적 에러 해결] pandas의 to_excel을 안 쓰고, xlwt로 직접 구워냅니다!
 def df_to_xls_bytes(df):
     wb = xlwt.Workbook(encoding='utf-8')
     ws = wb.add_sheet('Sheet1')
-    
-    # 헤더(첫 줄) 쓰기
     for col_idx, col_name in enumerate(df.columns):
         ws.write(0, col_idx, str(col_name))
-        
-    # 데이터 내용 쓰기
     for row_idx, row in enumerate(df.itertuples(index=False)):
         for col_idx, val in enumerate(row):
-            # 숫자는 숫자로, 나머지는 문자로 깔끔하게 입력
             if pd.isna(val) or val == "":
                 ws.write(row_idx + 1, col_idx, "")
             elif isinstance(val, (int, float, np.integer, np.floating)):
                 ws.write(row_idx + 1, col_idx, val)
             else:
                 ws.write(row_idx + 1, col_idx, str(val))
-                
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()
@@ -96,7 +89,7 @@ st.set_page_config(page_title="폴레드 주문분배 시스템", page_icon="�
 SIDEBAR_LOGO_URL = "https://cdn-pro-web-223-233.cdn-nhncommerce.com/poled0304_godomall_com/data/skin/front/db_poled_C/img/dimg/about_logo02.png"
 
 st.title("🍶 MADE BY DS ")
-st.caption("Seosan & Yongma Multi-Warehouse Allocation Engine (v8.3 - Native xlwt Engine)")
+st.caption("Seosan & Yongma Multi-Warehouse Engine (v8.6 - Soft Routing & Split Mode)")
 st.markdown("---")
 
 ALLOWED_8DIGIT_CODES = [
@@ -136,7 +129,7 @@ def get_pack_stats(df):
     return stats
 
 # ==========================================================
-# 2. 세션 금고 & 클라우드 자동 불러오기
+# 2. 세션 금고 
 # ==========================================================
 if 'inventory_loaded' not in st.session_state:
     st.session_state['inventory_loaded'] = False
@@ -155,17 +148,17 @@ with st.sidebar:
     st.image(SIDEBAR_LOGO_URL, width="stretch")
     st.markdown("---")
     
-    st.header("🎯 서산창고 일일 CAPA 설정")
-    seosan_capa = st.number_input("서산 하루 최대 배정(건)", value=1400, step=100)
+    st.header("🎯 서산창고 일일 CAPA (박스/건수)")
+    seosan_capa = st.number_input("서산 하루 최대 배정(박스)", value=1400, step=100)
     
     current_seosan_alloc = sum(h.get('서산 단포', 0) + h.get('서산 단수합포', 0) + h.get('서산 이종합포', 0) for h in st.session_state['history'])
     
     progress_val = min(current_seosan_alloc / seosan_capa, 1.0) if seosan_capa > 0 else 0.0
     st.progress(progress_val)
     if current_seosan_alloc >= seosan_capa:
-        st.error(f"📦 현재 누적 배정량: **{current_seosan_alloc}** / {seosan_capa}건 (CAPA 초과!)")
+        st.error(f"📦 현재 누적 배정량: **{current_seosan_alloc}** / {seosan_capa} 박스 (CAPA 도달 - 우회 활성화)")
     else:
-        st.caption(f"📦 현재 누적 배정량: **{current_seosan_alloc}** / {seosan_capa}건")
+        st.caption(f"📦 현재 누적 배정량: **{current_seosan_alloc}** / {seosan_capa} 박스")
 
     st.markdown("---")
     st.header("🏢 1단계: 창고 재고 업로드")
@@ -200,10 +193,7 @@ with st.sidebar:
                 st.session_state['stock_yongma'] = df_y.groupby('제품코드')['재고수량'].sum().to_dict()
                 
                 st.session_state['inventory_loaded'] = True
-                
-                if save_to_cloud():
-                    st.toast("☁️ 재고 데이터가 클라우드 DB에 무사히 저장되었습니다!", icon="✅")
-                    
+                save_to_cloud()
                 st.success("✅ 재고 등록 완료!")
                 st.rerun()
             except Exception as e:
@@ -213,7 +203,7 @@ with st.sidebar:
     if st.button("🚨 당일 마감 & 초기화", type="secondary"):
         st.session_state.clear()
         save_to_cloud()
-        st.success("🔄 초기화 및 클라우드 청소 완료.")
+        st.success("🔄 초기화 완료.")
         st.rerun()
 
     st.markdown("---")
@@ -253,35 +243,34 @@ if is_morning:
     if file_order:
         if "프랭클린" in file_order.name:
             try:
-                temp_df = pd.read_excel(file_order, usecols="Q", engine='xlrd' if file_order.name.endswith('.xls') else None)
-                unique_cnt = temp_df.iloc[:, 0].nunique()
+                try: temp_df = pd.read_excel(file_order, engine='xlrd' if file_order.name.endswith('.xls') else None)
+                except: temp_df = pd.read_excel(file_order)
+                
+                # 💡 보다 확실하게 17번째 열(Q열)의 고유값 계산
+                unique_cnt = temp_df.iloc[:, 16].nunique() 
                 
                 if unique_cnt >= 1200:
                     default_priority_idx = 2  
-                    st.info(f"💡 **[오전 모드] '프랭클린' 감지 (Q열 고유: {unique_cnt}건)** ➔ **[스마트 혼합]** 자동 선택!")
+                    st.info(f"💡 **[오전 모드] '프랭클린' 감지 (Q열 고유: {unique_cnt}건)** ➔ 1,200건 이상이므로 **[스마트 혼합]** 자동 선택!")
                 else:
                     default_priority_idx = 0  
-                    st.info(f"💡 **[오전 모드] '프랭클린' 감지 (Q열 고유: {unique_cnt}건)** ➔ **[서산창고 우선]** 자동 선택!")
-            except Exception as e:
-                st.warning("⚠️ 데이터 분석 실패 ➔ 기본값 세팅")
+                    st.info(f"💡 **[오전 모드] '프랭클린' 감지 (Q열 고유: {unique_cnt}건)** ➔ 1,200건 미만이므로 **[서산창고 우선]** 자동 선택!")
+            except:
+                pass
             finally:
                 file_order.seek(0)
         else:
             default_priority_idx = 1
-            st.info("💡 **[오전 모드] 일반 발주서 감지** ➔ **[용마창고 우선]** 자동 선택!")
 else:
-    st.info("🕒 **[오후 수동 심플 배정] 모드 작동 중입니다.** (스마트 자동 선택 해제)")
-    priority_options = [
-        '서산창고 우선 (모든 건 서산 ➔ 용마)', 
-        '용마창고 우선 (모든 건 용마 ➔ 서산)'
-    ]
+    st.info("🕒 **[오후 수동 심플 배정] 모드 작동 중입니다.**")
+    priority_options = ['서산창고 우선 (모든 건 서산 ➔ 용마)', '용마창고 우선 (모든 건 용마 ➔ 서산)']
     default_priority_idx = 1
 
 priority_choice = st.radio("🍶 **우선 순위 설정:**", priority_options, index=default_priority_idx, horizontal=True)
 
 if file_order and st.button("🚀 자동 분배 실행", type="primary"):
     try:
-        with st.spinner("배정 로직 가동 중... (실시간 CAPA 감지 중)"):
+        with st.spinner("배정 로직 가동 중... (유연한 출고 최우선 방어)"):
             try: orders_df = pd.read_excel(file_order, engine='xlrd' if file_order.name.endswith('.xls') else None)
             except: orders_df = pd.read_excel(file_order)
 
@@ -317,19 +306,23 @@ if file_order and st.button("🚀 자동 분배 실행", type="primary"):
             running_seosan_alloc = current_seosan_alloc 
             capa_routed_count = 0 
             
+            # 💡 [출고 최우선 스마트 로직 시작]
             for oid, group in grouped:
                 items = group.to_dict('records')
                 reqs = {}
                 for it in items: reqs[it['제품코드']] = reqs.get(it['제품코드'], 0) + it['수량']
                 
+                # 1. 태생적 우선순위 결정
                 if "서산창고 우선" in priority_choice:
                     base_pri = '서산'
                 elif "용마창고 우선" in priority_choice:
                     base_pri = '용마'
-                else:
+                else: # 스마트 혼합
                     is_multi_sku = len(reqs) > 1
                     base_pri = '용마' if is_multi_sku else '서산'
                 
+                # 2. CAPA 한도 우회 (Soft Routing)
+                # 단포/동종합포로 서산으로 가려는데 한도가 넘었으면, 1순위를 '용마'로 부드럽게 꺾어줍니다.
                 if base_pri == '서산' and running_seosan_alloc >= seosan_capa:
                     curr_pri = '용마'
                     capa_routed_count += 1
@@ -341,43 +334,45 @@ if file_order and st.button("🚀 자동 분배 실행", type="primary"):
                 pri_stock = temp_s if curr_pri == '서산' else temp_y
                 sec_stock = temp_y if curr_pri == '서산' else temp_s
                 
+                # 3. 1순위 창고 완배정 시도
                 if all(pri_stock.get(it['제품코드'], 0) >= it['수량'] for it in items):
                     for it in items:
                         pc, q, idx = it['제품코드'], it['수량'], it['_orig_idx']
                         pri_stock[pc] -= q
-                        res = {'주문번호': oid, '제품코드': pc, '수량': q, '서산배정': 0, '용마배정': 0, '상태': f'{pri_name} 완배'}
-                        res[f'{pri_name}배정'] = q
-                        results_map[idx] = res
+                        results_map[idx] = {'주문번호': oid, '제품코드': pc, '수량': q, '서산배정': q if pri_name=='서산' else 0, '용마배정': q if pri_name=='용마' else 0, '상태': f'{pri_name} 완배'}
                     if pri_name == '서산': running_seosan_alloc += 1
                     continue
                     
+                # 4. 2순위 창고 완배정 시도 (구출 로직 - 한도 넘었어도 미배정보다는 2순위에서 살려냄)
                 if all(sec_stock.get(it['제품코드'], 0) >= it['수량'] for it in items):
                     for it in items:
                         pc, q, idx = it['제품코드'], it['수량'], it['_orig_idx']
                         sec_stock[pc] -= q
-                        res = {'주문번호': oid, '제품코드': pc, '수량': q, '서산배정': 0, '용마배정': 0, '상태': f'{sec_name} 완배'}
-                        res[f'{sec_name}배정'] = q
-                        results_map[idx] = res
+                        results_map[idx] = {'주문번호': oid, '제품코드': pc, '수량': q, '서산배정': q if sec_name=='서산' else 0, '용마배정': q if sec_name=='용마' else 0, '상태': f'{sec_name} 완배'}
                     if sec_name == '서산': running_seosan_alloc += 1
                     continue
                     
+                # 5. 분할 배정 (한쪽 창고로 안 되면 영혼까지 끌어모아서 양쪽으로 쪼개서라도 무조건 배정!)
                 if all(reqs[pc] <= (temp_s.get(pc, 0) + temp_y.get(pc, 0)) for pc in reqs):
                     for it in items:
                         pc, q, idx = it['제품코드'], it['수량'], it['_orig_idx']
                         av_s, av_y = temp_s.get(pc, 0), temp_y.get(pc, 0)
                         if curr_pri == '서산':
-                            t_s = min(q, av_s); temp_s[pc] = av_s - t_s; t_y = q - t_s; temp_y[pc] = av_y - t_y
+                            t_s = min(q, av_s); temp_s[pc] -= t_s
+                            t_y = q - t_s; temp_y[pc] -= t_y
                         else:
-                            t_y = min(q, av_y); temp_y[pc] = av_y - t_y; t_s = q - t_y; temp_s[pc] = av_s - t_s
+                            t_y = min(q, av_y); temp_y[pc] -= t_y
+                            t_s = q - t_y; temp_s[pc] -= t_s
                         results_map[idx] = {'주문번호': oid, '제품코드': pc, '수량': q, '서산배정': t_s, '용마배정': t_y, '상태': '분할배정'}
-                    running_seosan_alloc += 1
+                    running_seosan_alloc += 1 # 쪼개져서 서산에 걸치므로 서산 박스 증가
                 else:
+                    # 6. 진짜로 양쪽 재고를 다 합쳐도 부족할 때만 최종 미배정 처리
                     for it in items:
                         idx = it['_orig_idx']
                         pc = it['제품코드']
                         total_avail = temp_s.get(pc, 0) + temp_y.get(pc, 0)
                         reason_str = '실재고부족' if reqs[pc] > total_avail else '합배송품절'
-                        results_map[idx] = {'주문번호': oid, '제품코드': it['제품코드'], '수량': it['수량'], '서산배정': 0, '용마배정': 0, '상태': reason_str}
+                        results_map[idx] = {'주문번호': oid, '제품코드': pc, '수량': it['수량'], '서산배정': 0, '용마배정': 0, '상태': reason_str}
             
             results_list = [results_map[i] for i in range(len(orders_df))]
             st.session_state['stock_seosan'] = temp_s
@@ -407,8 +402,7 @@ if file_order and st.button("🚀 자동 분배 실행", type="primary"):
                 '미배정': df_un['주문번호'].nunique() if not df_un.empty else 0
             })
             
-            if save_to_cloud():
-                st.toast("☁️ 변경된 재고량이 클라우드 DB에 무사히 저장되었습니다!", icon="💾")
+            save_to_cloud()
             
             today_str = datetime.datetime.now(ZoneInfo("Asia/Seoul")).strftime("%m%d")
             order_cnt = st.session_state['order_count']
@@ -426,7 +420,7 @@ if file_order and st.button("🚀 자동 분배 실행", type="primary"):
             st.success(f"🎉 {st.session_state['order_count']}차 배정 완료!")
             
             if capa_routed_count > 0:
-                st.warning(f"🚨 **CAPA 알림:** 작업 도중 서산창고 일일 한도({seosan_capa}건)를 초과하여, **{capa_routed_count}건의 주문이 용마창고로 자동 우회(Routing)** 배정되었습니다!")
+                st.warning(f"🚨 **CAPA 우회 알림:** 서산 한도({seosan_capa}박스)에 도달하여, **{capa_routed_count}박스가 용마 우선으로 자동 우회**되었습니다. (단, 용마 품절 시 서산에서 출고됨)")
             
             st.subheader(f"📊 {st.session_state['order_count']}차 포장 유형 분석")
             rc1, rc2, rc3 = st.columns(3)
