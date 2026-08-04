@@ -9,11 +9,12 @@ import warnings
 import urllib.request
 import urllib.parse
 from zoneinfo import ZoneInfo
+import xlwt  # 💡 [핵심] 파이썬을 거치지 않고 xlwt 기계를 직접 사용합니다!
 
 warnings.filterwarnings('ignore', category=UserWarning, module='openpyxl')
 
 # ==========================================================
-# 0. 구글 시트 통신 및 .xls 파일 생성 엔진 🤖
+# 0. 구글 시트 통신 및 진짜 .xls 파일 수동 생성 엔진 🤖
 # ==========================================================
 def load_from_cloud():
     try:
@@ -64,9 +65,28 @@ def save_to_cloud():
     except Exception:
         return False
 
+# 💡 [치명적 에러 해결] pandas의 to_excel을 안 쓰고, xlwt로 직접 구워냅니다!
 def df_to_xls_bytes(df):
+    wb = xlwt.Workbook(encoding='utf-8')
+    ws = wb.add_sheet('Sheet1')
+    
+    # 헤더(첫 줄) 쓰기
+    for col_idx, col_name in enumerate(df.columns):
+        ws.write(0, col_idx, str(col_name))
+        
+    # 데이터 내용 쓰기
+    for row_idx, row in enumerate(df.itertuples(index=False)):
+        for col_idx, val in enumerate(row):
+            # 숫자는 숫자로, 나머지는 문자로 깔끔하게 입력
+            if pd.isna(val) or val == "":
+                ws.write(row_idx + 1, col_idx, "")
+            elif isinstance(val, (int, float, np.integer, np.floating)):
+                ws.write(row_idx + 1, col_idx, val)
+            else:
+                ws.write(row_idx + 1, col_idx, str(val))
+                
     buf = io.BytesIO()
-    df.to_excel(buf, index=False, engine='xlwt')
+    wb.save(buf)
     return buf.getvalue()
 
 # ==========================================================
@@ -76,7 +96,7 @@ st.set_page_config(page_title="폴레드 주문분배 시스템", page_icon="�
 SIDEBAR_LOGO_URL = "https://cdn-pro-web-223-233.cdn-nhncommerce.com/poled0304_godomall_com/data/skin/front/db_poled_C/img/dimg/about_logo02.png"
 
 st.title("🍶 MADE BY DS ")
-st.caption("Seosan & Yongma Multi-Warehouse Allocation Engine (v8.1 - TEST MODE)")
+st.caption("Seosan & Yongma Multi-Warehouse Allocation Engine (v8.3 - Native xlwt Engine)")
 st.markdown("---")
 
 ALLOWED_8DIGIT_CODES = [
@@ -196,7 +216,6 @@ with st.sidebar:
         st.success("🔄 초기화 및 클라우드 청소 완료.")
         st.rerun()
 
-    # 💡 [테스트 전용] 시간 강제 조작 스위치 추가!
     st.markdown("---")
     st.header("🛠️ [테스트 전용] 타임머신")
     test_time_mode = st.radio("강제 시간 설정:", ["현재 실제 시간", "🌞 무조건 오전 (스마트)", "🌙 무조건 오후 (수동)"])
@@ -215,7 +234,6 @@ if not st.session_state['inventory_loaded']:
 st.header("📋 2단계: 발주서 분배 (연속 차감)")
 file_order = st.file_uploader(f"📑 발주서 ({st.session_state['order_count']+1}차 - .xlsx, .xls 가능)", type=['xlsx', 'xls'])
 
-# 💡 [핵심] 스위치 상태에 따라 시간 강제 적용
 current_kst_time = datetime.datetime.now(ZoneInfo("Asia/Seoul"))
 if test_time_mode == "🌞 무조건 오전 (스마트)":
     is_morning = True
@@ -224,15 +242,13 @@ elif test_time_mode == "🌙 무조건 오후 (수동)":
 else:
     is_morning = current_kst_time.hour < 12
 
-
 if is_morning:
-    # --- [오전 모드] ---
     priority_options = [
         '서산창고 우선 (모든 건 서산 ➔ 용마)', 
         '용마창고 우선 (모든 건 용마 ➔ 서산)', 
         '스마트 혼합 (단포·단수: 서산우선 / 이종: 용마우선)'
     ]
-    default_priority_idx = 1 # 기본값 용마
+    default_priority_idx = 1
     
     if file_order:
         if "프랭클린" in file_order.name:
@@ -254,7 +270,6 @@ if is_morning:
             default_priority_idx = 1
             st.info("💡 **[오전 모드] 일반 발주서 감지** ➔ **[용마창고 우선]** 자동 선택!")
 else:
-    # --- [오후 모드] ---
     st.info("🕒 **[오후 수동 심플 배정] 모드 작동 중입니다.** (스마트 자동 선택 해제)")
     priority_options = [
         '서산창고 우선 (모든 건 서산 ➔ 용마)', 
@@ -263,7 +278,6 @@ else:
     default_priority_idx = 1
 
 priority_choice = st.radio("🍶 **우선 순위 설정:**", priority_options, index=default_priority_idx, horizontal=True)
-
 
 if file_order and st.button("🚀 자동 분배 실행", type="primary"):
     try:
