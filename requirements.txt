@@ -1,1 +1,8 @@
 xlwt
+streamlit
+pandas
+numpy
+openpyxl
+xlrd
+gspread
+google-auth
