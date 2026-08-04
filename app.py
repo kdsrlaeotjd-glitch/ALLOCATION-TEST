@@ -13,7 +13,7 @@ from zoneinfo import ZoneInfo
 warnings.filterwarnings('ignore', category=UserWarning, module='openpyxl')
 
 # ==========================================================
-# 0. 구글 시트 통신 및 .xls 파일 생성 엔진 🤖
+# 0. 구글 시트 통신 및 '진짜' .xls 파일 생성 엔진 🤖 (v8.2)
 # ==========================================================
 def load_from_cloud():
     try:
@@ -67,53 +67,23 @@ def save_to_cloud():
         st.error(f"🚨 구글 시트 저장 실패: {repr(e)}")
         return False
 
+# 💡 [핵심 변경] xlwt 라이브러리를 사용하여 팝업창 없는 '진짜' 바이너리 엑셀 생성
 def df_to_xls_bytes(df):
-    """DataFrame을 WMS 및 MS Excel 호환 .xls 바이너리 스트림으로 변환"""
-    xml_str = '<?xml version="1.0" encoding="utf-8"?>\n'
-    xml_str += '<?mso-application progid="Excel.Sheet"?>\n'
-    xml_str += '<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet"\n'
-    xml_str += ' xmlns:o="urn:schemas-microsoft-com:office:office"\n'
-    xml_str += ' xmlns:x="urn:schemas-microsoft-com:office:excel"\n'
-    xml_str += ' xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">\n'
-    xml_str += ' <Worksheet ss:Name="Sheet1">\n'
-    xml_str += '  <Table>\n'
-    
-    xml_str += '   <Row>\n'
-    for col in df.columns:
-        clean_col = str(col).replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
-        xml_str += f'    <Cell><Data ss:Type="String">{clean_col}</Data></Cell>\n'
-    xml_str += '   </Row>\n'
-    
-    for _, row in df.iterrows():
-        xml_str += '   <Row>\n'
-        for val in row:
-            if pd.isna(val) or val is None:
-                cell_str = ''
-                cell_type = 'String'
-            elif isinstance(val, (int, float, np.integer, np.floating)):
-                cell_str = str(val)
-                cell_type = 'Number'
-            else:
-                cell_str = str(val).replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
-                cell_type = 'String'
-            xml_str += f'    <Cell><Data ss:Type="{cell_type}">{cell_str}</Data></Cell>\n'
-        xml_str += '   </Row>\n'
-        
-    xml_str += '  </Table>\n'
-    xml_str += ' </Worksheet>\n'
-    xml_str += '</Workbook>'
-    
-    return xml_str.encode('utf-8')
+    """DataFrame을 경고창 없는 진짜(BIFF8) .xls 바이너리로 변환"""
+    buf = io.BytesIO()
+    # pandas에 내장된 xlwt 엔진을 사용하여 완벽한 구형 엑셀 파일 생성
+    df.to_excel(buf, index=False, engine='xlwt')
+    return buf.getvalue()
 
 # ==========================================================
-# 1. Web UI 구성 및 기본 세팅 (v8.1 - CAPA 1400 Routing)
+# 1. Web UI 구성 및 기본 세팅 (v8.2 - True XLS Warning-Free)
 # ==========================================================
 st.set_page_config(page_title="폴레드 주문분배 시스템", page_icon="🍶", layout="wide")
 
 SIDEBAR_LOGO_URL = "https://cdn-pro-web-223-233.cdn-nhncommerce.com/poled0304_godomall_com/data/skin/front/db_poled_C/img/dimg/about_logo02.png"
 
 st.title("🍶 MADE BY DS ")
-st.caption("Seosan & Yongma Multi-Warehouse Allocation Engine (v8.1 - Dynamic CAPA 1400)")
+st.caption("Seosan & Yongma Multi-Warehouse Allocation Engine (v8.2 - True XLS Warning-Free)")
 st.markdown("---")
 
 ALLOWED_8DIGIT_CODES = [
@@ -172,11 +142,9 @@ with st.sidebar:
     st.image(SIDEBAR_LOGO_URL, width="stretch")
     st.markdown("---")
     
-    # 💡 [핵심] 일일 서산 CAPA(한도) 컨트롤러 (기본값 1400)
     st.header("🎯 서산창고 일일 CAPA 설정")
     seosan_capa = st.number_input("서산 하루 최대 배정(건)", value=1400, step=100)
     
-    # 현재까지 누적된 서산 주문건수(포장건수) 계산
     current_seosan_alloc = sum(h.get('서산 단포', 0) + h.get('서산 단수합포', 0) + h.get('서산 이종합포', 0) for h in st.session_state['history'])
     
     progress_val = min(current_seosan_alloc / seosan_capa, 1.0) if seosan_capa > 0 else 0.0
@@ -265,7 +233,6 @@ current_kst_time = datetime.datetime.now(ZoneInfo("Asia/Seoul"))
 is_morning = current_kst_time.hour < 12
 
 if is_morning:
-    # --- [오전 12시 이전: 스마트 혼합 배정 모드] ---
     priority_options = [
         '서산창고 우선 (모든 건 서산 ➔ 용마)', 
         '용마창고 우선 (모든 건 용마 ➔ 서산)', 
@@ -293,7 +260,6 @@ if is_morning:
             default_priority_idx = 1
             st.info("💡 **[오전 모드] 일반 발주서 감지 (프랭클린 아님)** ➔ **[용마창고 우선]**이 자동 선택되었습니다.")
 else:
-    # --- [오후 12시 이후: 심플 수동 배정 모드] ---
     st.info("🕒 **오후 12시가 지나 [수동 심플 배정] 모드로 전환되었습니다.** (스마트 자동 선택 해제)")
     priority_options = [
         '서산창고 우선 (모든 건 서산 ➔ 용마)', 
@@ -339,17 +305,14 @@ if file_order and st.button("🚀 자동 분배 실행", type="primary"):
                 
             grouped = list(orders_df.groupby('주문번호', sort=False))
             
-            # 💡 [핵심] 현재 작업 중 실시간으로 서산 CAPA를 트래킹하기 위한 변수
             running_seosan_alloc = current_seosan_alloc 
-            capa_routed_count = 0 # 한도 초과로 우회된 건수
+            capa_routed_count = 0 
             
-            # 💡 [Order-by-Order 딥러닝급 순차 처리 로직]
             for oid, group in grouped:
                 items = group.to_dict('records')
                 reqs = {}
                 for it in items: reqs[it['제품코드']] = reqs.get(it['제품코드'], 0) + it['수량']
                 
-                # 1. 사용자가 선택한 라디오 버튼에 따른 '기본 우선순위' 판단
                 if "서산창고 우선" in priority_choice:
                     base_pri = '서산'
                 elif "용마창고 우선" in priority_choice:
@@ -358,8 +321,6 @@ if file_order and st.button("🚀 자동 분배 실행", type="primary"):
                     is_multi_sku = len(reqs) > 1
                     base_pri = '용마' if is_multi_sku else '서산'
                 
-                # 2. [CAPA 1,400건 강제 우회 로직] 
-                # 서산으로 가야 할 운명인데 한도(1400건)가 넘었으면 무조건 용마로 꺾어버림!
                 if base_pri == '서산' and running_seosan_alloc >= seosan_capa:
                     curr_pri = '용마'
                     capa_routed_count += 1
@@ -371,7 +332,6 @@ if file_order and st.button("🚀 자동 분배 실행", type="primary"):
                 pri_stock = temp_s if curr_pri == '서산' else temp_y
                 sec_stock = temp_y if curr_pri == '서산' else temp_s
                 
-                # 시도 1: 우선 창고 완배정
                 if all(pri_stock.get(it['제품코드'], 0) >= it['수량'] for it in items):
                     for it in items:
                         pc, q, idx = it['제품코드'], it['수량'], it['_orig_idx']
@@ -382,7 +342,6 @@ if file_order and st.button("🚀 자동 분배 실행", type="primary"):
                     if pri_name == '서산': running_seosan_alloc += 1
                     continue
                     
-                # 시도 2: 2순위 창고(대체 창고) 완배정
                 if all(sec_stock.get(it['제품코드'], 0) >= it['수량'] for it in items):
                     for it in items:
                         pc, q, idx = it['제품코드'], it['수량'], it['_orig_idx']
@@ -393,7 +352,6 @@ if file_order and st.button("🚀 자동 분배 실행", type="primary"):
                     if sec_name == '서산': running_seosan_alloc += 1
                     continue
                     
-                # 시도 3: 분할 배정 (양쪽 다 끌어모으기) 또는 품절
                 if all(reqs[pc] <= (temp_s.get(pc, 0) + temp_y.get(pc, 0)) for pc in reqs):
                     for it in items:
                         pc, q, idx = it['제품코드'], it['수량'], it['_orig_idx']
@@ -403,7 +361,6 @@ if file_order and st.button("🚀 자동 분배 실행", type="primary"):
                         else:
                             t_y = min(q, av_y); temp_y[pc] = av_y - t_y; t_s = q - t_y; temp_s[pc] = av_s - t_s
                         results_map[idx] = {'주문번호': oid, '제품코드': pc, '수량': q, '서산배정': t_s, '용마배정': t_y, '상태': '분할배정'}
-                    # 서산에서 1개라도 나갔으므로 건수 증가 처리 (안전빵)
                     running_seosan_alloc += 1
                 else:
                     for it in items:
@@ -459,7 +416,6 @@ if file_order and st.button("🚀 자동 분배 실행", type="primary"):
             
             st.success(f"🎉 {st.session_state['order_count']}차 배정 완료!")
             
-            # 💡 한도 초과 우회 안내 메시지 띄우기
             if capa_routed_count > 0:
                 st.warning(f"🚨 **CAPA 알림:** 작업 도중 서산창고 일일 한도({seosan_capa}건)를 초과하여, **{capa_routed_count}건의 주문이 용마창고로 자동 우회(Routing)** 배정되었습니다!")
             
