@@ -89,7 +89,7 @@ st.set_page_config(page_title="폴레드 주문분배 시스템", page_icon="�
 SIDEBAR_LOGO_URL = "https://cdn-pro-web-223-233.cdn-nhncommerce.com/poled0304_godomall_com/data/skin/front/db_poled_C/img/dimg/about_logo02.png"
 
 st.title("🍶 MADE BY DS ")
-st.caption("Seosan & Yongma Multi-Warehouse Engine (v8.6 - Soft Routing & Split Mode)")
+st.caption("Seosan & Yongma Multi-Warehouse Engine (v8.7 - Smart Sequence & Soft Routing)")
 st.markdown("---")
 
 ALLOWED_8DIGIT_CODES = [
@@ -246,7 +246,6 @@ if is_morning:
                 try: temp_df = pd.read_excel(file_order, engine='xlrd' if file_order.name.endswith('.xls') else None)
                 except: temp_df = pd.read_excel(file_order)
                 
-                # 💡 보다 확실하게 17번째 열(Q열)의 고유값 계산
                 unique_cnt = temp_df.iloc[:, 16].nunique() 
                 
                 if unique_cnt >= 1200:
@@ -270,7 +269,7 @@ priority_choice = st.radio("🍶 **우선 순위 설정:**", priority_options, i
 
 if file_order and st.button("🚀 자동 분배 실행", type="primary"):
     try:
-        with st.spinner("배정 로직 가동 중... (유연한 출고 최우선 방어)"):
+        with st.spinner("배정 로직 가동 중... (실시간 순서 최적화 진행 중)"):
             try: orders_df = pd.read_excel(file_order, engine='xlrd' if file_order.name.endswith('.xls') else None)
             except: orders_df = pd.read_excel(file_order)
 
@@ -303,25 +302,38 @@ if file_order and st.button("🚀 자동 분배 실행", type="primary"):
                 
             grouped = list(orders_df.groupby('주문번호', sort=False))
             
+            # 💡 [핵심 업데이트] 스마트 배정 순서 변경!
+            # 스마트 혼합 모드일 경우, 이종합포를 먼저 처리하고 이후 단포/동종합포를 처리합니다.
+            if "스마트 혼합" in priority_choice:
+                multi_sku_groups = []
+                single_sku_groups = []
+                for oid, group in grouped:
+                    items = group.to_dict('records')
+                    reqs_check = set(it['제품코드'] for it in items)
+                    if len(reqs_check) > 1:
+                        multi_sku_groups.append((oid, items))
+                    else:
+                        single_sku_groups.append((oid, items))
+                # 이종합포(multi) 먼저, 그다음 단포/단수(single) 순서로 합치기
+                ordered_groups = multi_sku_groups + single_sku_groups
+            else:
+                ordered_groups = [(oid, group.to_dict('records')) for oid, group in grouped]
+            
             running_seosan_alloc = current_seosan_alloc 
             capa_routed_count = 0 
             
-            # 💡 [출고 최우선 스마트 로직 시작]
-            for oid, group in grouped:
-                items = group.to_dict('records')
+            for oid, items in ordered_groups:
                 reqs = {}
                 for it in items: reqs[it['제품코드']] = reqs.get(it['제품코드'], 0) + it['수량']
                 
-                # 1. 태생적 우선순위 결정
                 if "서산창고 우선" in priority_choice:
                     base_pri = '서산'
                 elif "용마창고 우선" in priority_choice:
                     base_pri = '용마'
-                else: # 스마트 혼합
+                else: 
                     is_multi_sku = len(reqs) > 1
                     base_pri = '용마' if is_multi_sku else '서산'
                 
-                # 2. CAPA 한도 우회 (Soft Routing)
                 # 단포/동종합포로 서산으로 가려는데 한도가 넘었으면, 1순위를 '용마'로 부드럽게 꺾어줍니다.
                 if base_pri == '서산' and running_seosan_alloc >= seosan_capa:
                     curr_pri = '용마'
@@ -334,7 +346,6 @@ if file_order and st.button("🚀 자동 분배 실행", type="primary"):
                 pri_stock = temp_s if curr_pri == '서산' else temp_y
                 sec_stock = temp_y if curr_pri == '서산' else temp_s
                 
-                # 3. 1순위 창고 완배정 시도
                 if all(pri_stock.get(it['제품코드'], 0) >= it['수량'] for it in items):
                     for it in items:
                         pc, q, idx = it['제품코드'], it['수량'], it['_orig_idx']
@@ -343,7 +354,7 @@ if file_order and st.button("🚀 자동 분배 실행", type="primary"):
                     if pri_name == '서산': running_seosan_alloc += 1
                     continue
                     
-                # 4. 2순위 창고 완배정 시도 (구출 로직 - 한도 넘었어도 미배정보다는 2순위에서 살려냄)
+                # 2순위 창고 완배정 시도 (구출 로직)
                 if all(sec_stock.get(it['제품코드'], 0) >= it['수량'] for it in items):
                     for it in items:
                         pc, q, idx = it['제품코드'], it['수량'], it['_orig_idx']
@@ -352,7 +363,7 @@ if file_order and st.button("🚀 자동 분배 실행", type="primary"):
                     if sec_name == '서산': running_seosan_alloc += 1
                     continue
                     
-                # 5. 분할 배정 (한쪽 창고로 안 되면 영혼까지 끌어모아서 양쪽으로 쪼개서라도 무조건 배정!)
+                # 분할 배정 (양쪽 쪼개서라도 무조건 100% 출고)
                 if all(reqs[pc] <= (temp_s.get(pc, 0) + temp_y.get(pc, 0)) for pc in reqs):
                     for it in items:
                         pc, q, idx = it['제품코드'], it['수량'], it['_orig_idx']
@@ -364,9 +375,8 @@ if file_order and st.button("🚀 자동 분배 실행", type="primary"):
                             t_y = min(q, av_y); temp_y[pc] -= t_y
                             t_s = q - t_y; temp_s[pc] -= t_s
                         results_map[idx] = {'주문번호': oid, '제품코드': pc, '수량': q, '서산배정': t_s, '용마배정': t_y, '상태': '분할배정'}
-                    running_seosan_alloc += 1 # 쪼개져서 서산에 걸치므로 서산 박스 증가
+                    running_seosan_alloc += 1 # 서산이 일부 출고되었으므로 CAPA 박스 누적
                 else:
-                    # 6. 진짜로 양쪽 재고를 다 합쳐도 부족할 때만 최종 미배정 처리
                     for it in items:
                         idx = it['_orig_idx']
                         pc = it['제품코드']
