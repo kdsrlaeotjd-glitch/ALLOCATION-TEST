@@ -13,7 +13,7 @@ from zoneinfo import ZoneInfo
 warnings.filterwarnings('ignore', category=UserWarning, module='openpyxl')
 
 # ==========================================================
-# 0. 구글 시트 통신 및 '진짜' .xls 파일 생성 엔진 🤖 (v8.2)
+# 0. 구글 시트 통신 및 .xls 파일 생성 엔진 🤖
 # ==========================================================
 def load_from_cloud():
     try:
@@ -38,7 +38,6 @@ def load_from_cloud():
 def save_to_cloud():
     try:
         if "WEB_APP_URL" not in st.secrets:
-            st.error("🚨 Streamlit Secrets에 'WEB_APP_URL'이 설정되어 있지 않습니다.")
             return False
             
         url = st.secrets["WEB_APP_URL"]
@@ -61,29 +60,23 @@ def save_to_cloud():
             if "SUCCESS" in res_text:
                 return True
             else:
-                st.error(f"🚨 구글 시트 저장 서버 응답: {res_text}")
                 return False
-    except Exception as e:
-        st.error(f"🚨 구글 시트 저장 실패: {repr(e)}")
+    except Exception:
         return False
 
-# 💡 [핵심 변경] xlwt 라이브러리를 사용하여 팝업창 없는 '진짜' 바이너리 엑셀 생성
 def df_to_xls_bytes(df):
-    """DataFrame을 경고창 없는 진짜(BIFF8) .xls 바이너리로 변환"""
     buf = io.BytesIO()
-    # pandas에 내장된 xlwt 엔진을 사용하여 완벽한 구형 엑셀 파일 생성
     df.to_excel(buf, index=False, engine='xlwt')
     return buf.getvalue()
 
 # ==========================================================
-# 1. Web UI 구성 및 기본 세팅 (v8.2 - True XLS Warning-Free)
+# 1. Web UI 구성 및 기본 세팅 
 # ==========================================================
 st.set_page_config(page_title="폴레드 주문분배 시스템", page_icon="🍶", layout="wide")
-
 SIDEBAR_LOGO_URL = "https://cdn-pro-web-223-233.cdn-nhncommerce.com/poled0304_godomall_com/data/skin/front/db_poled_C/img/dimg/about_logo02.png"
 
 st.title("🍶 MADE BY DS ")
-st.caption("Seosan & Yongma Multi-Warehouse Allocation Engine (v8.2 - True XLS Warning-Free)")
+st.caption("Seosan & Yongma Multi-Warehouse Allocation Engine (v8.1 - TEST MODE)")
 st.markdown("---")
 
 ALLOWED_8DIGIT_CODES = [
@@ -136,7 +129,7 @@ if 'inventory_loaded' not in st.session_state:
         st.toast("☁️ 구글 시트(DB)에서 마지막 작업 상태를 불러왔습니다!", icon="✅")
 
 # ==========================================================
-# 3. 사이드바 (CAPA 기능 1400건 적용)
+# 3. 사이드바 
 # ==========================================================
 with st.sidebar:
     st.image(SIDEBAR_LOGO_URL, width="stretch")
@@ -196,23 +189,17 @@ with st.sidebar:
             except Exception as e:
                 st.error(f"⚠️ 재고 로딩 에러: {e}")
                 
-    if st.session_state['inventory_loaded']:
-        st.markdown("---")
-        st.header("💾 잔여 재고 수동 백업")
-        df_s_bk = pd.DataFrame(list(st.session_state['stock_seosan'].items()), columns=['제품코드', '재고수량'])
-        df_y_bk = pd.DataFrame(list(st.session_state['stock_yongma'].items()), columns=['제품코드', '재고수량'])
-        bk_zip = io.BytesIO()
-        with zipfile.ZipFile(bk_zip, 'w', zipfile.ZIP_DEFLATED) as zf:
-            zf.writestr("백업_서산창고.xls", df_to_xls_bytes(df_s_bk))
-            zf.writestr("백업_용마창고.xls", df_to_xls_bytes(df_y_bk))
-        st.download_button("💾 이중 백업 (ZIP) 다운로드", bk_zip.getvalue(), f"잔여재고_수동백업_{datetime.datetime.now(ZoneInfo('Asia/Seoul')).strftime('%m%d_%H%M')}.zip", "application/zip", type="secondary")
-
     st.markdown("---")
     if st.button("🚨 당일 마감 & 초기화", type="secondary"):
         st.session_state.clear()
         save_to_cloud()
         st.success("🔄 초기화 및 클라우드 청소 완료.")
         st.rerun()
+
+    # 💡 [테스트 전용] 시간 강제 조작 스위치 추가!
+    st.markdown("---")
+    st.header("🛠️ [테스트 전용] 타임머신")
+    test_time_mode = st.radio("강제 시간 설정:", ["현재 실제 시간", "🌞 무조건 오전 (스마트)", "🌙 무조건 오후 (수동)"])
 
 # ==========================================================
 # 4. 메인 화면
@@ -226,13 +213,20 @@ if not st.session_state['inventory_loaded']:
     st.stop()
 
 st.header("📋 2단계: 발주서 분배 (연속 차감)")
-
 file_order = st.file_uploader(f"📑 발주서 ({st.session_state['order_count']+1}차 - .xlsx, .xls 가능)", type=['xlsx', 'xls'])
 
+# 💡 [핵심] 스위치 상태에 따라 시간 강제 적용
 current_kst_time = datetime.datetime.now(ZoneInfo("Asia/Seoul"))
-is_morning = current_kst_time.hour < 12
+if test_time_mode == "🌞 무조건 오전 (스마트)":
+    is_morning = True
+elif test_time_mode == "🌙 무조건 오후 (수동)":
+    is_morning = False
+else:
+    is_morning = current_kst_time.hour < 12
+
 
 if is_morning:
+    # --- [오전 모드] ---
     priority_options = [
         '서산창고 우선 (모든 건 서산 ➔ 용마)', 
         '용마창고 우선 (모든 건 용마 ➔ 서산)', 
@@ -247,20 +241,21 @@ if is_morning:
                 unique_cnt = temp_df.iloc[:, 0].nunique()
                 
                 if unique_cnt >= 1200:
-                    default_priority_idx = 2  # 스마트 혼합
-                    st.info(f"💡 **[오전 모드] '프랭클린' 파일 감지! (Q열 고유: {unique_cnt}건)** ➔ 1,200건 이상이므로 **[스마트 혼합]**이 자동 선택되었습니다.")
+                    default_priority_idx = 2  
+                    st.info(f"💡 **[오전 모드] '프랭클린' 감지 (Q열 고유: {unique_cnt}건)** ➔ **[스마트 혼합]** 자동 선택!")
                 else:
-                    default_priority_idx = 0  # 서산 우선
-                    st.info(f"💡 **[오전 모드] '프랭클린' 파일 감지! (Q열 고유: {unique_cnt}건)** ➔ 1,200건 미만이므로 **[서산창고 우선]**이 자동 선택되었습니다.")
+                    default_priority_idx = 0  
+                    st.info(f"💡 **[오전 모드] '프랭클린' 감지 (Q열 고유: {unique_cnt}건)** ➔ **[서산창고 우선]** 자동 선택!")
             except Exception as e:
-                st.warning("⚠️ 데이터 분석 실패 ➔ 기본값(용마 우선) 세팅")
+                st.warning("⚠️ 데이터 분석 실패 ➔ 기본값 세팅")
             finally:
                 file_order.seek(0)
         else:
             default_priority_idx = 1
-            st.info("💡 **[오전 모드] 일반 발주서 감지 (프랭클린 아님)** ➔ **[용마창고 우선]**이 자동 선택되었습니다.")
+            st.info("💡 **[오전 모드] 일반 발주서 감지** ➔ **[용마창고 우선]** 자동 선택!")
 else:
-    st.info("🕒 **오후 12시가 지나 [수동 심플 배정] 모드로 전환되었습니다.** (스마트 자동 선택 해제)")
+    # --- [오후 모드] ---
+    st.info("🕒 **[오후 수동 심플 배정] 모드 작동 중입니다.** (스마트 자동 선택 해제)")
     priority_options = [
         '서산창고 우선 (모든 건 서산 ➔ 용마)', 
         '용마창고 우선 (모든 건 용마 ➔ 서산)'
