@@ -89,7 +89,7 @@ st.set_page_config(page_title="폴레드 주문분배 시스템", page_icon="�
 SIDEBAR_LOGO_URL = "https://cdn-pro-web-223-233.cdn-nhncommerce.com/poled0304_godomall_com/data/skin/front/db_poled_C/img/dimg/about_logo02.png"
 
 st.title("🍶 MADE BY DS ")
-st.caption("Seosan & Yongma Multi-Warehouse Engine (v8.7 - Smart Sequence & Soft Routing)")
+st.caption("Seosan & Yongma Multi-Warehouse Engine (v8.93 - Strict Column Mode)")
 st.markdown("---")
 
 ALLOWED_8DIGIT_CODES = [
@@ -156,7 +156,7 @@ with st.sidebar:
     progress_val = min(current_seosan_alloc / seosan_capa, 1.0) if seosan_capa > 0 else 0.0
     st.progress(progress_val)
     if current_seosan_alloc >= seosan_capa:
-        st.error(f"📦 현재 누적 배정량: **{current_seosan_alloc}** / {seosan_capa} 박스 (CAPA 도달 - 우회 활성화)")
+        st.error(f"📦 현재 누적 배정량: **{current_seosan_alloc}** / {seosan_capa} 박스 (CAPA 초과 - 우회 활성화)")
     else:
         st.caption(f"📦 현재 누적 배정량: **{current_seosan_alloc}** / {seosan_capa} 박스")
 
@@ -170,23 +170,16 @@ with st.sidebar:
     if st.button("📥 재고 확정", type="primary", disabled=is_disabled):
         if file_seosan and file_yongma:
             try:
-                df_s_check = pd.read_excel(file_seosan, nrows=0, engine='xlrd' if file_seosan.name.endswith('.xls') else None)
-                if '제품코드' in df_s_check.columns and '재고수량' in df_s_check.columns:
-                    df_s = pd.read_excel(file_seosan, usecols=['제품코드', '재고수량'], engine='xlrd' if file_seosan.name.endswith('.xls') else None)
-                else:
-                    df_s = pd.read_excel(file_seosan, usecols="B,L", engine='xlrd' if file_seosan.name.endswith('.xls') else None)
-                    df_s.columns = ['제품코드', '재고수량']
+                # 💡 [핵심 원복] 쓸데없는 자동탐색 제거하고 B열, L열(서산) / B열, H열(용마) 강제 고정 읽기!
+                df_s = pd.read_excel(file_seosan, usecols="B,L", engine='xlrd' if file_seosan.name.endswith('.xls') else None)
+                df_s.columns = ['제품코드', '재고수량']
                 df_s['제품코드'] = clean_product_code(df_s['제품코드'])
                 df_s['재고수량'] = pd.to_numeric(df_s['재고수량'], errors='coerce').fillna(0)
                 df_s = df_s[df_s['제품코드'] != ""]
                 st.session_state['stock_seosan'] = df_s.groupby('제품코드')['재고수량'].sum().to_dict()
                 
-                df_y_check = pd.read_excel(file_yongma, nrows=0, engine='xlrd' if file_yongma.name.endswith('.xls') else None)
-                if '제품코드' in df_y_check.columns and '재고수량' in df_y_check.columns:
-                    df_y = pd.read_excel(file_yongma, usecols=['제품코드', '재고수량'], engine='xlrd' if file_yongma.name.endswith('.xls') else None)
-                else:
-                    df_y = pd.read_excel(file_yongma, usecols="B,H", engine='xlrd' if file_yongma.name.endswith('.xls') else None)
-                    df_y.columns = ['제품코드', '재고수량']
+                df_y = pd.read_excel(file_yongma, usecols="B,H", engine='xlrd' if file_yongma.name.endswith('.xls') else None)
+                df_y.columns = ['제품코드', '재고수량']
                 df_y['제품코드'] = clean_product_code(df_y['제품코드'])
                 df_y['재고수량'] = pd.to_numeric(df_y['재고수량'], errors='coerce').fillna(0)
                 df_y = df_y[df_y['제품코드'] != ""]
@@ -194,7 +187,7 @@ with st.sidebar:
                 
                 st.session_state['inventory_loaded'] = True
                 save_to_cloud()
-                st.success("✅ 재고 등록 완료!")
+                st.success("✅ 재고 등록 완료! (지정 열 B, H, L 스캔 완료)")
                 st.rerun()
             except Exception as e:
                 st.error(f"⚠️ 재고 로딩 에러: {e}")
@@ -246,6 +239,7 @@ if is_morning:
                 try: temp_df = pd.read_excel(file_order, engine='xlrd' if file_order.name.endswith('.xls') else None)
                 except: temp_df = pd.read_excel(file_order)
                 
+                # J열(인덱스 9), Q열(인덱스 16), S열(인덱스 18) - 확실한 열 인덱스 기준
                 unique_cnt = temp_df.iloc[:, 16].nunique() 
                 
                 if unique_cnt >= 1200:
@@ -269,13 +263,14 @@ priority_choice = st.radio("🍶 **우선 순위 설정:**", priority_options, i
 
 if file_order and st.button("🚀 자동 분배 실행", type="primary"):
     try:
-        with st.spinner("배정 로직 가동 중... (실시간 순서 최적화 진행 중)"):
+        with st.spinner("배정 로직 가동 중... (조건부 하이브리드 최적화 진행 중)"):
             try: orders_df = pd.read_excel(file_order, engine='xlrd' if file_order.name.endswith('.xls') else None)
             except: orders_df = pd.read_excel(file_order)
 
+            # 💡 [핵심 원복] 발주서도 J열(9번째), S열(18번째) 칼같이 고정!
             orders_df.columns = orders_df.columns.str.strip()
             orig_columns = orders_df.columns.tolist()
-            qty_col_name = orig_columns[18]
+            qty_col_name = orig_columns[18] # S열
             
             col_B_name = orig_columns[1]; col_A_name = orig_columns[0]
             orders_df[col_B_name] = orders_df[col_B_name].astype(str).str.replace(r'_사은품.*', '', regex=True).str.strip()
@@ -286,10 +281,10 @@ if file_order and st.button("🚀 자동 분배 실행", type="primary"):
             is_type1 = col_A_str.str.contains(pattern, na=False, regex=True)
             orders_df['주문번호'] = np.where(is_type1, col_A_str, col_B_str)
             
-            orig_pcode_col_name = orig_columns[9]
+            orig_pcode_col_name = orig_columns[9] # J열
             orders_df[orig_pcode_col_name] = clean_product_code(orders_df.iloc[:, 9])
             orders_df['제품코드'] = orders_df[orig_pcode_col_name]
-            orders_df['수량'] = pd.to_numeric(orders_df.iloc[:, 18], errors='coerce').fillna(0)
+            orders_df['수량'] = pd.to_numeric(orders_df.iloc[:, 18], errors='coerce').fillna(0) # S열
             
             orders_df = orders_df[orders_df['제품코드'] != ""].reset_index(drop=True)
             orders_df['_orig_idx'] = orders_df.index
@@ -301,28 +296,39 @@ if file_order and st.button("🚀 자동 분배 실행", type="primary"):
             results_map = {}
                 
             grouped = list(orders_df.groupby('주문번호', sort=False))
+            total_boxes = len(grouped)
             
-            # 💡 [핵심 업데이트] 스마트 배정 순서 변경!
-            # 스마트 혼합 모드일 경우, 이종합포를 먼저 처리하고 이후 단포/동종합포를 처리합니다.
-            if "스마트 혼합" in priority_choice:
-                multi_sku_groups = []
-                single_sku_groups = []
-                for oid, group in grouped:
-                    items = group.to_dict('records')
-                    reqs_check = set(it['제품코드'] for it in items)
-                    if len(reqs_check) > 1:
-                        multi_sku_groups.append((oid, items))
-                    else:
-                        single_sku_groups.append((oid, items))
-                # 이종합포(multi) 먼저, 그다음 단포/단수(single) 순서로 합치기
-                ordered_groups = multi_sku_groups + single_sku_groups
+            if total_boxes >= 1800:
+                target_yongma_boxes = total_boxes * 0.4
             else:
-                ordered_groups = [(oid, group.to_dict('records')) for oid, group in grouped]
+                target_yongma_boxes = 0
+                
+            current_yongma_boxes = 0
+            
+            ordered_groups = []
+            for oid, group in grouped:
+                items = group.to_dict('records')
+                reqs_check = set(it['제품코드'] for it in items)
+                total_qty = sum(it['수량'] for it in items)
+                if len(reqs_check) > 1:
+                    cat = '이종'
+                elif total_qty > 1:
+                    cat = '동종'
+                else:
+                    cat = '단포'
+                ordered_groups.append((oid, items, cat))
+
+            if "스마트 혼합" in priority_choice:
+                def sort_key(x):
+                    if x[2] == '이종': return 1
+                    elif x[2] == '동종': return 2
+                    else: return 3
+                ordered_groups.sort(key=sort_key)
             
             running_seosan_alloc = current_seosan_alloc 
             capa_routed_count = 0 
             
-            for oid, items in ordered_groups:
+            for oid, items, cat in ordered_groups:
                 reqs = {}
                 for it in items: reqs[it['제품코드']] = reqs.get(it['제품코드'], 0) + it['수량']
                 
@@ -331,10 +337,19 @@ if file_order and st.button("🚀 자동 분배 실행", type="primary"):
                 elif "용마창고 우선" in priority_choice:
                     base_pri = '용마'
                 else: 
-                    is_multi_sku = len(reqs) > 1
-                    base_pri = '용마' if is_multi_sku else '서산'
+                    if total_boxes >= 1800:
+                        if cat == '이종':
+                            base_pri = '용마'
+                        elif cat == '동종':
+                            base_pri = '용마' if current_yongma_boxes < target_yongma_boxes else '서산'
+                        else:
+                            base_pri = '서산'
+                    else:
+                        if cat == '이종':
+                            base_pri = '용마'
+                        else:
+                            base_pri = '서산'
                 
-                # 단포/동종합포로 서산으로 가려는데 한도가 넘었으면, 1순위를 '용마'로 부드럽게 꺾어줍니다.
                 if base_pri == '서산' and running_seosan_alloc >= seosan_capa:
                     curr_pri = '용마'
                     capa_routed_count += 1
@@ -346,36 +361,41 @@ if file_order and st.button("🚀 자동 분배 실행", type="primary"):
                 pri_stock = temp_s if curr_pri == '서산' else temp_y
                 sec_stock = temp_y if curr_pri == '서산' else temp_s
                 
+                # 방어 코드 (.get) 유지 - 엑셀에 없는 코드가 발주서에 있을 경우 에러 방지
                 if all(pri_stock.get(it['제품코드'], 0) >= it['수량'] for it in items):
                     for it in items:
                         pc, q, idx = it['제품코드'], it['수량'], it['_orig_idx']
-                        pri_stock[pc] -= q
+                        pri_stock[pc] = pri_stock.get(pc, 0) - q
                         results_map[idx] = {'주문번호': oid, '제품코드': pc, '수량': q, '서산배정': q if pri_name=='서산' else 0, '용마배정': q if pri_name=='용마' else 0, '상태': f'{pri_name} 완배'}
                     if pri_name == '서산': running_seosan_alloc += 1
+                    if pri_name == '용마': current_yongma_boxes += 1
                     continue
                     
-                # 2순위 창고 완배정 시도 (구출 로직)
                 if all(sec_stock.get(it['제품코드'], 0) >= it['수량'] for it in items):
                     for it in items:
                         pc, q, idx = it['제품코드'], it['수량'], it['_orig_idx']
-                        sec_stock[pc] -= q
+                        sec_stock[pc] = sec_stock.get(pc, 0) - q
                         results_map[idx] = {'주문번호': oid, '제품코드': pc, '수량': q, '서산배정': q if sec_name=='서산' else 0, '용마배정': q if sec_name=='용마' else 0, '상태': f'{sec_name} 완배'}
                     if sec_name == '서산': running_seosan_alloc += 1
+                    if sec_name == '용마': current_yongma_boxes += 1
                     continue
                     
-                # 분할 배정 (양쪽 쪼개서라도 무조건 100% 출고)
                 if all(reqs[pc] <= (temp_s.get(pc, 0) + temp_y.get(pc, 0)) for pc in reqs):
+                    yongma_contributed = False
                     for it in items:
                         pc, q, idx = it['제품코드'], it['수량'], it['_orig_idx']
                         av_s, av_y = temp_s.get(pc, 0), temp_y.get(pc, 0)
                         if curr_pri == '서산':
-                            t_s = min(q, av_s); temp_s[pc] -= t_s
-                            t_y = q - t_s; temp_y[pc] -= t_y
+                            t_s = min(q, av_s); temp_s[pc] = temp_s.get(pc, 0) - t_s
+                            t_y = q - t_s; temp_y[pc] = temp_y.get(pc, 0) - t_y
                         else:
-                            t_y = min(q, av_y); temp_y[pc] -= t_y
-                            t_s = q - t_y; temp_s[pc] -= t_s
+                            t_y = min(q, av_y); temp_y[pc] = temp_y.get(pc, 0) - t_y
+                            t_s = q - t_y; temp_s[pc] = temp_s.get(pc, 0) - t_s
                         results_map[idx] = {'주문번호': oid, '제품코드': pc, '수량': q, '서산배정': t_s, '용마배정': t_y, '상태': '분할배정'}
-                    running_seosan_alloc += 1 # 서산이 일부 출고되었으므로 CAPA 박스 누적
+                        if t_y > 0: yongma_contributed = True
+                        
+                    running_seosan_alloc += 1 
+                    if yongma_contributed: current_yongma_boxes += 1
                 else:
                     for it in items:
                         idx = it['_orig_idx']
@@ -429,8 +449,14 @@ if file_order and st.button("🚀 자동 분배 실행", type="primary"):
             
             st.success(f"🎉 {st.session_state['order_count']}차 배정 완료!")
             
+            if "스마트 혼합" in priority_choice:
+                if total_boxes >= 1800:
+                    st.info(f"🎯 **[1,800건 이상] 용마 40% 로드 밸런싱 결과:** 전체 {total_boxes}박스 중 **{current_yongma_boxes}박스 용마 배정 완료** (목표: {int(target_yongma_boxes)}박스)")
+                else:
+                    st.info(f"💡 **[1,800건 미만] 스마트 혼합 기본 배정:** 전체 {total_boxes}박스 중 이종합포 위주로 **{current_yongma_boxes}박스 용마 배정 완료**")
+
             if capa_routed_count > 0:
-                st.warning(f"🚨 **CAPA 우회 알림:** 서산 한도({seosan_capa}박스)에 도달하여, **{capa_routed_count}박스가 용마 우선으로 자동 우회**되었습니다. (단, 용마 품절 시 서산에서 출고됨)")
+                st.warning(f"🚨 **CAPA 우회 알림:** 서산 한도({seosan_capa}박스)에 도달하여, **{capa_routed_count}박스가 용마 우선으로 자동 우회**되었습니다.")
             
             st.subheader(f"📊 {st.session_state['order_count']}차 포장 유형 분석")
             rc1, rc2, rc3 = st.columns(3)
