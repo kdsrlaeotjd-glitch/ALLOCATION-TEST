@@ -12,11 +12,13 @@ import xlwt
 warnings.filterwarnings('ignore', category=UserWarning, module='openpyxl')
 
 # ==========================================================
-# 0. 구글 시트 통신 및 진짜 .xls 파일 생성 엔진 🤖
+# 0. 구글 시트 통신 및 진짜 .xls 파일 생성 엔진 🤖 (에러 탐지기 장착)
 # ==========================================================
 def load_from_cloud():
     try:
-        if "WEB_APP_URL" not in st.secrets: return False
+        if "WEB_APP_URL" not in st.secrets: 
+            st.warning("⚠️ Secrets에 WEB_APP_URL이 없습니다. (저장 기능 꺼짐)")
+            return False
         url = st.secrets["WEB_APP_URL"]
         req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
         with urllib.request.urlopen(req, timeout=10) as response:
@@ -29,7 +31,8 @@ def load_from_cloud():
                 st.session_state['order_count'] = parsed.get('order_count', 0)
                 st.session_state['history'] = parsed.get('history', [])
                 return True
-    except: pass
+    except Exception as e: 
+        st.error(f"🚨 DB 불러오기 실패: {e}") # 원인 화면 출력!
     return False
 
 def save_to_cloud():
@@ -47,8 +50,13 @@ def save_to_cloud():
         json_payload = json.dumps(data, ensure_ascii=False).encode('utf-8')
         req = urllib.request.Request(url, data=json_payload, headers={'Content-Type': 'text/plain;charset=utf-8'})
         with urllib.request.urlopen(req, timeout=10) as response:
-            return "SUCCESS" in response.read().decode('utf-8')
-    except: return False
+            res_text = response.read().decode('utf-8')
+            if "SUCCESS" not in res_text:
+                st.error(f"🚨 DB 저장 오류 응답: {res_text}")
+            return "SUCCESS" in res_text
+    except Exception as e: 
+        st.error(f"🚨 DB 저장 통신 실패: {e}") # 원인 화면 출력!
+        return False
 
 def df_to_xls_bytes(df):
     wb = xlwt.Workbook(encoding='utf-8')
@@ -71,7 +79,7 @@ st.set_page_config(page_title="폴레드 주문분배 시스템", page_icon="�
 SIDEBAR_LOGO_URL = "https://cdn-pro-web-223-233.cdn-nhncommerce.com/poled0304_godomall_com/data/skin/front/db_poled_C/img/dimg/about_logo02.png"
 
 st.title("🍶 MADE BY DS ")
-st.caption("Seosan & Yongma Multi-Warehouse Engine (v9.2 - Dashboard & Layout Optimized)")
+st.caption("Seosan & Yongma Multi-Warehouse Engine (v9.3 - DB Debug Mode)")
 st.markdown("---")
 
 ALLOWED_8DIGIT_CODES = [
@@ -137,7 +145,8 @@ with st.sidebar:
             st.session_state['stock_yongma'] = df_y[df_y['제품코드'] != ""].groupby('제품코드')['재고수량'].sum().to_dict()
             
             st.session_state['inventory_loaded'] = True
-            save_to_cloud()
+            if save_to_cloud():
+                st.toast("✅ 구글 시트 저장 성공!", icon="☁️")
             st.rerun()
         except Exception as e: st.error(f"⚠️ 재고 로딩 에러: {e}")
                 
@@ -148,7 +157,7 @@ with st.sidebar:
         st.rerun()
 
 # ==========================================================
-# 4. 메인 화면 (배정 대시보드)
+# 4. 메인 화면 (지휘관 대시보드)
 # ==========================================================
 c1, c2 = st.columns(2)
 c1.info(f"🍶 **서산 잔여 품목:** {len(st.session_state['stock_seosan'])}개")
@@ -158,7 +167,6 @@ if not st.session_state['inventory_loaded']:
     st.warning("👈 좌측에서 재고를 먼저 등록해주세요.")
     st.stop()
 
-# 💡 [핵심 개선] 누적 히스토리를 항상 상단에 배치하여 닫기 버튼을 눌러도 시야에서 사라지지 않게 함!
 if st.session_state['history']:
     st.markdown("---")
     st.subheader("📈 누적 배정 히스토리")
@@ -168,21 +176,16 @@ st.markdown("---")
 st.header("📋 2단계: 발주서 분배 (실시간 대시보드)")
 file_order = st.file_uploader(f"📑 발주서 ({st.session_state['order_count']+1}차 - .xlsx, .xls 가능)", type=['xlsx', 'xls'])
 
-# 결과가 세션에 저장되어 있으면 다운로드 화면을 띄움
 if 'latest_result' in st.session_state:
     res = st.session_state['latest_result']
     st.success(f"🎉 {res['order_cnt']}차 배정 완료! (서산 배정 목표 {res['target_seosan_boxes']}박스 중 {res['current_file_seosan_alloc']}박스 할당됨)")
     
-    st.markdown("### 💾 개별 결과 파일 다운로드")
+    st.markdown("### 💾 개별 결과 파일 다운로드 (클릭해도 창이 닫히지 않습니다)")
     d1, d2, d3, d4 = st.columns(4)
-    with d1:
-        st.download_button("🏢 서산창고 (.xls)", res['df_s_bytes'], f"{res['today_str']}_{res['order_cnt']}차_서산.xls", "application/vnd.ms-excel", use_container_width=True)
-    with d2:
-        st.download_button("🏢 용마창고 (.xls)", res['df_y_bytes'], f"{res['today_str']}_{res['order_cnt']}차_용마.xls", "application/vnd.ms-excel", use_container_width=True)
-    with d3:
-        st.download_button("⚠️ 미배정 (.xls)", res['df_un_bytes'], f"{res['today_str']}_{res['order_cnt']}차_미배정.xls", "application/vnd.ms-excel", use_container_width=True)
-    with d4:
-        st.download_button("📊 모니터링 (.xls)", res['df_mon_bytes'], f"{res['today_str']}_{res['order_cnt']}차_모니터링.xls", "application/vnd.ms-excel", use_container_width=True)
+    with d1: st.download_button("🏢 서산창고 (.xls)", res['df_s_bytes'], f"{res['today_str']}_{res['order_cnt']}차_서산.xls", "application/vnd.ms-excel", use_container_width=True)
+    with d2: st.download_button("🏢 용마창고 (.xls)", res['df_y_bytes'], f"{res['today_str']}_{res['order_cnt']}차_용마.xls", "application/vnd.ms-excel", use_container_width=True)
+    with d3: st.download_button("⚠️ 미배정 (.xls)", res['df_un_bytes'], f"{res['today_str']}_{res['order_cnt']}차_미배정.xls", "application/vnd.ms-excel", use_container_width=True)
+    with d4: st.download_button("📊 모니터링 (.xls)", res['df_mon_bytes'], f"{res['today_str']}_{res['order_cnt']}차_모니터링.xls", "application/vnd.ms-excel", use_container_width=True)
     
     st.markdown("---")
     st.subheader(f"📊 {res['order_cnt']}차 포장 유형 분석")
@@ -196,7 +199,6 @@ if 'latest_result' in st.session_state:
         del st.session_state['latest_result']
         st.rerun()
 
-# 결과물이 없을 때만 (배정 전) 발주서 분석 화면과 실행 버튼 표시
 elif file_order:
     try: orders_df = pd.read_excel(file_order, engine='xlrd' if file_order.name.endswith('.xls') else None)
     except: orders_df = pd.read_excel(file_order)
@@ -231,11 +233,9 @@ elif file_order:
         items = group.to_dict('records')
         reqs_check = set(it['제품코드'] for it in items)
         total_qty = sum(it['수량'] for it in items)
-        
         if len(reqs_check) > 1: cat = '이종'
         elif total_qty > 1: cat = '동종'
         else: cat = '단포'
-        
         cat_counts[cat] += 1
         ordered_groups.append((oid, items, cat))
 
@@ -244,22 +244,15 @@ elif file_order:
     with st.form("allocation_form"):
         st.markdown("### 🎯 서산창고 배정 타겟 설정")
         st.caption("설정된 타겟만큼 **[단포 ➔ 동종합포 ➔ 이종합포]** 순서로 서산에 우선 배정, 나머지는 용마로 배정됩니다.")
-        
         t_col1, t_col2 = st.columns(2)
-        with t_col1:
-            target_mode = st.radio("설정 방식", ["비율(%)로 설정", "건수(박스)로 설정"], horizontal=True)
-        with t_col2:
-            target_val = st.number_input("목표 값 입력 (비율은 %, 건수는 박스 수)", min_value=0, value=100, step=10)
-        
+        with t_col1: target_mode = st.radio("설정 방식", ["비율(%)로 설정", "건수(박스)로 설정"], horizontal=True)
+        with t_col2: target_val = st.number_input("목표 값 입력 (비율은 %, 건수는 박스 수)", min_value=0, value=100, step=10)
         submitted = st.form_submit_button("🚀 자동 분배 실행", type="primary")
 
     if submitted:
-        with st.spinner("목표치에 맞춰 최적화 배정 중..."):
-            
-            if target_mode == "비율(%)로 설정":
-                target_seosan_boxes = int(total_boxes * (target_val / 100.0))
-            else:
-                target_seosan_boxes = int(target_val)
+        with st.spinner("지휘관 목표치에 맞춰 최적화 배정 중..."):
+            if target_mode == "비율(%)로 설정": target_seosan_boxes = int(total_boxes * (target_val / 100.0))
+            else: target_seosan_boxes = int(target_val)
                 
             total_stats = get_pack_stats(orders_df)
 
@@ -272,45 +265,36 @@ elif file_order:
             temp_s = st.session_state['stock_seosan'].copy()
             temp_y = st.session_state['stock_yongma'].copy()
             results_map = {}
-            
             current_file_seosan_alloc = 0 
             
             for oid, items, cat in ordered_groups:
                 reqs = {}
                 for it in items: reqs[it['제품코드']] = reqs.get(it['제품코드'], 0) + it['수량']
                 
-                # 💡 [핵심] 이제 서산 일일 CAPA 제한이 사라졌으므로, 오직 파일 타겟 수량만 봅니다!
-                if current_file_seosan_alloc < target_seosan_boxes:
-                    base_pri = '서산'
-                else:
-                    base_pri = '용마'
+                if current_file_seosan_alloc < target_seosan_boxes: base_pri = '서산'
+                else: base_pri = '용마'
                     
                 pri_name = '서산' if base_pri == '서산' else '용마'
                 sec_name = '용마' if base_pri == '서산' else '서산'
                 pri_stock = temp_s if base_pri == '서산' else temp_y
                 sec_stock = temp_y if base_pri == '서산' else temp_s
                 
-                # 1. 1순위 창고 완배정
                 if all(pri_stock.get(it['제품코드'], 0) >= it['수량'] for it in items):
                     for it in items:
                         pc, q, idx = it['제품코드'], it['수량'], it['_orig_idx']
                         pri_stock[pc] = pri_stock.get(pc, 0) - q
                         results_map[idx] = {'주문번호': oid, '제품코드': pc, '수량': q, '서산배정': q if pri_name=='서산' else 0, '용마배정': q if pri_name=='용마' else 0, '상태': f'{pri_name} 완배'}
-                    if pri_name == '서산': 
-                        current_file_seosan_alloc += 1
+                    if pri_name == '서산': current_file_seosan_alloc += 1
                     continue
                     
-                # 2. 2순위 창고 완배정 (결품 시 자동 구출)
                 if all(sec_stock.get(it['제품코드'], 0) >= it['수량'] for it in items):
                     for it in items:
                         pc, q, idx = it['제품코드'], it['수량'], it['_orig_idx']
                         sec_stock[pc] = sec_stock.get(pc, 0) - q
                         results_map[idx] = {'주문번호': oid, '제품코드': pc, '수량': q, '서산배정': q if sec_name=='서산' else 0, '용마배정': q if sec_name=='용마' else 0, '상태': f'{sec_name} 완배'}
-                    if sec_name == '서산': 
-                        current_file_seosan_alloc += 1
+                    if sec_name == '서산': current_file_seosan_alloc += 1
                     continue
                     
-                # 3. 양쪽 쪼개기
                 if all(reqs[pc] <= (temp_s.get(pc, 0) + temp_y.get(pc, 0)) for pc in reqs):
                     seosan_contributed = False
                     for it in items:
@@ -324,11 +308,8 @@ elif file_order:
                             t_s = q - t_y; temp_s[pc] = temp_s.get(pc, 0) - t_s
                         results_map[idx] = {'주문번호': oid, '제품코드': pc, '수량': q, '서산배정': t_s, '용마배정': t_y, '상태': '분할배정'}
                         if t_s > 0: seosan_contributed = True
-                        
-                    if seosan_contributed: 
-                        current_file_seosan_alloc += 1
+                    if seosan_contributed: current_file_seosan_alloc += 1
                 else:
-                    # 4. 미배정
                     for it in items:
                         idx = it['_orig_idx']
                         pc = it['제품코드']
@@ -379,5 +360,4 @@ elif file_order:
                 'order_cnt': st.session_state['order_count'],
                 'today_str': datetime.datetime.now(ZoneInfo("Asia/Seoul")).strftime("%m%d")
             }
-            
             st.rerun()
