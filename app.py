@@ -71,7 +71,7 @@ st.set_page_config(page_title="폴레드 주문분배 시스템", page_icon="�
 SIDEBAR_LOGO_URL = "https://cdn-pro-web-223-233.cdn-nhncommerce.com/poled0304_godomall_com/data/skin/front/db_poled_C/img/dimg/about_logo02.png"
 
 st.title("🍶 MADE BY DS ")
-st.caption("Seosan & Yongma Multi-Warehouse Engine (v9.1 - Commander UI / Fast Input)")
+st.caption("Seosan & Yongma Multi-Warehouse Engine (v9.2 - Dashboard & Layout Optimized)")
 st.markdown("---")
 
 ALLOWED_8DIGIT_CODES = [
@@ -112,18 +112,10 @@ if 'inventory_loaded' not in st.session_state:
     if load_from_cloud(): st.toast("☁️ 마지막 작업 상태를 불러왔습니다!", icon="✅")
 
 # ==========================================================
-# 3. 사이드바 (일일 안전 CAPA 및 재고)
+# 3. 사이드바 (재고 업로드)
 # ==========================================================
 with st.sidebar:
     st.image(SIDEBAR_LOGO_URL, width="stretch")
-    st.markdown("---")
-    st.header("🎯 서산창고 일일 안전 CAPA")
-    seosan_capa = st.number_input("서산 하루 최대 한도 (박스)", value=1400, step=100)
-    current_seosan_alloc = sum(h.get('서산 단포', 0) + h.get('서산 단수합포', 0) + h.get('서산 이종합포', 0) for h in st.session_state['history'])
-    st.progress(min(current_seosan_alloc / seosan_capa, 1.0) if seosan_capa > 0 else 0.0)
-    if current_seosan_alloc >= seosan_capa: st.error(f"📦 누적: {current_seosan_alloc} / {seosan_capa} (초과)")
-    else: st.caption(f"📦 누적: {current_seosan_alloc} / {seosan_capa}")
-
     st.markdown("---")
     st.header("🏢 1단계: 창고 재고 업로드")
     is_disabled = st.session_state['inventory_loaded']
@@ -166,10 +158,17 @@ if not st.session_state['inventory_loaded']:
     st.warning("👈 좌측에서 재고를 먼저 등록해주세요.")
     st.stop()
 
+# 💡 [핵심 개선] 누적 히스토리를 항상 상단에 배치하여 닫기 버튼을 눌러도 시야에서 사라지지 않게 함!
+if st.session_state['history']:
+    st.markdown("---")
+    st.subheader("📈 누적 배정 히스토리")
+    st.dataframe(pd.DataFrame(st.session_state['history']), hide_index=True, width="stretch")
+
+st.markdown("---")
 st.header("📋 2단계: 발주서 분배 (실시간 대시보드)")
 file_order = st.file_uploader(f"📑 발주서 ({st.session_state['order_count']+1}차 - .xlsx, .xls 가능)", type=['xlsx', 'xls'])
 
-# 💡 [핵심] 결과가 세션에 저장되어 있으면 다운로드 화면을 띄움
+# 결과가 세션에 저장되어 있으면 다운로드 화면을 띄움
 if 'latest_result' in st.session_state:
     res = st.session_state['latest_result']
     st.success(f"🎉 {res['order_cnt']}차 배정 완료! (서산 배정 목표 {res['target_seosan_boxes']}박스 중 {res['current_file_seosan_alloc']}박스 할당됨)")
@@ -192,7 +191,6 @@ if 'latest_result' in st.session_state:
     with rc2: st.write("**🏢 서산**"); st.write(f"단포: `{res['s_stats']['단포']}` / 단수: `{res['s_stats']['단수합포']}` / 이종: `{res['s_stats']['이종합포']}`")
     with rc3: st.write("**🏢 용마**"); st.write(f"단포: `{res['y_stats']['단포']}` / 단수: `{res['y_stats']['단수합포']}` / 이종: `{res['y_stats']['이종합포']}`")
     
-    # 💡 결과를 확인하고 완료 버튼을 눌러야만 화면이 리셋됨
     st.markdown("---")
     if st.button("✅ 배정 완료 (화면 닫기 및 다음 차수 준비)", type="primary"):
         del st.session_state['latest_result']
@@ -243,7 +241,6 @@ elif file_order:
 
     st.success(f"📊 **현재 발주서 요약:** 총 **{total_boxes}** 박스 (단포: `{cat_counts['단포']}` / 동종합포: `{cat_counts['동종']}` / 이종합포: `{cat_counts['이종']}`)")
 
-    # 💡 [핵심] 입력할 때마다 로딩되지 않도록 Form 으로 묶음!
     with st.form("allocation_form"):
         st.markdown("### 🎯 서산창고 배정 타겟 설정")
         st.caption("설정된 타겟만큼 **[단포 ➔ 동종합포 ➔ 이종합포]** 순서로 서산에 우선 배정, 나머지는 용마로 배정됩니다.")
@@ -254,19 +251,16 @@ elif file_order:
         with t_col2:
             target_val = st.number_input("목표 값 입력 (비율은 %, 건수는 박스 수)", min_value=0, value=100, step=10)
         
-        # 폼 안의 실행 버튼
         submitted = st.form_submit_button("🚀 자동 분배 실행", type="primary")
 
     if submitted:
         with st.spinner("지휘관 목표치에 맞춰 최적화 배정 중..."):
             
-            # 목표치 최종 계산
             if target_mode == "비율(%)로 설정":
                 target_seosan_boxes = int(total_boxes * (target_val / 100.0))
             else:
                 target_seosan_boxes = int(target_val)
                 
-            # 에러 수정: 전체 통계 계산!
             total_stats = get_pack_stats(orders_df)
 
             def sort_key(x):
@@ -279,14 +273,14 @@ elif file_order:
             temp_y = st.session_state['stock_yongma'].copy()
             results_map = {}
             
-            running_seosan_alloc = current_seosan_alloc 
             current_file_seosan_alloc = 0 
             
             for oid, items, cat in ordered_groups:
                 reqs = {}
                 for it in items: reqs[it['제품코드']] = reqs.get(it['제품코드'], 0) + it['수량']
                 
-                if current_file_seosan_alloc < target_seosan_boxes and running_seosan_alloc < seosan_capa:
+                # 💡 [핵심] 이제 서산 일일 CAPA 제한이 사라졌으므로, 오직 파일 타겟 수량만 봅니다!
+                if current_file_seosan_alloc < target_seosan_boxes:
                     base_pri = '서산'
                 else:
                     base_pri = '용마'
@@ -296,26 +290,27 @@ elif file_order:
                 pri_stock = temp_s if base_pri == '서산' else temp_y
                 sec_stock = temp_y if base_pri == '서산' else temp_s
                 
+                # 1. 1순위 창고 완배정
                 if all(pri_stock.get(it['제품코드'], 0) >= it['수량'] for it in items):
                     for it in items:
                         pc, q, idx = it['제품코드'], it['수량'], it['_orig_idx']
                         pri_stock[pc] = pri_stock.get(pc, 0) - q
                         results_map[idx] = {'주문번호': oid, '제품코드': pc, '수량': q, '서산배정': q if pri_name=='서산' else 0, '용마배정': q if pri_name=='용마' else 0, '상태': f'{pri_name} 완배'}
                     if pri_name == '서산': 
-                        running_seosan_alloc += 1
                         current_file_seosan_alloc += 1
                     continue
                     
+                # 2. 2순위 창고 완배정 (결품 시 자동 구출)
                 if all(sec_stock.get(it['제품코드'], 0) >= it['수량'] for it in items):
                     for it in items:
                         pc, q, idx = it['제품코드'], it['수량'], it['_orig_idx']
                         sec_stock[pc] = sec_stock.get(pc, 0) - q
                         results_map[idx] = {'주문번호': oid, '제품코드': pc, '수량': q, '서산배정': q if sec_name=='서산' else 0, '용마배정': q if sec_name=='용마' else 0, '상태': f'{sec_name} 완배'}
                     if sec_name == '서산': 
-                        running_seosan_alloc += 1
                         current_file_seosan_alloc += 1
                     continue
                     
+                # 3. 양쪽 쪼개기
                 if all(reqs[pc] <= (temp_s.get(pc, 0) + temp_y.get(pc, 0)) for pc in reqs):
                     seosan_contributed = False
                     for it in items:
@@ -331,9 +326,9 @@ elif file_order:
                         if t_s > 0: seosan_contributed = True
                         
                     if seosan_contributed: 
-                        running_seosan_alloc += 1
                         current_file_seosan_alloc += 1
                 else:
+                    # 4. 미배정
                     for it in items:
                         idx = it['_orig_idx']
                         pc = it['제품코드']
@@ -371,7 +366,6 @@ elif file_order:
             
             save_to_cloud()
             
-            # 💡 [핵심] 결과물을 세션에 저장하여, 다운로드 버튼을 눌러도 사라지지 않게 보호!
             st.session_state['latest_result'] = {
                 'df_s_bytes': df_to_xls_bytes(df_s[orig_columns] if not df_s.empty else df_s),
                 'df_y_bytes': df_to_xls_bytes(df_y[orig_columns] if not df_y.empty else df_y),
@@ -386,4 +380,4 @@ elif file_order:
                 'today_str': datetime.datetime.now(ZoneInfo("Asia/Seoul")).strftime("%m%d")
             }
             
-            st.rerun() # 결과 화면으로 전환
+            st.rerun()
