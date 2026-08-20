@@ -157,7 +157,7 @@ with st.sidebar:
         st.rerun()
 
 # ==========================================================
-# 4. 메인 화면 (지휘관 대시보드)
+# 4. 메인 화면 (배정 대시보드)
 # ==========================================================
 c1, c2 = st.columns(2)
 c1.info(f"🍶 **서산 잔여 품목:** {len(st.session_state['stock_seosan'])}개")
@@ -180,7 +180,7 @@ if 'latest_result' in st.session_state:
     res = st.session_state['latest_result']
     st.success(f"🎉 {res['order_cnt']}차 배정 완료! (서산 배정 목표 {res['target_seosan_boxes']}박스 중 {res['current_file_seosan_alloc']}박스 할당됨)")
     
-    st.markdown("### 💾 개별 결과 파일 다운로드 (클릭해도 창이 닫히지 않습니다)")
+    st.markdown("### 💾 개별 결과 파일 다운로드")
     d1, d2, d3, d4 = st.columns(4)
     with d1: st.download_button("🏢 서산창고 (.xls)", res['df_s_bytes'], f"{res['today_str']}_{res['order_cnt']}차_서산.xls", "application/vnd.ms-excel", use_container_width=True)
     with d2: st.download_button("🏢 용마창고 (.xls)", res['df_y_bytes'], f"{res['today_str']}_{res['order_cnt']}차_용마.xls", "application/vnd.ms-excel", use_container_width=True)
@@ -250,7 +250,7 @@ elif file_order:
         submitted = st.form_submit_button("🚀 자동 분배 실행", type="primary")
 
     if submitted:
-        with st.spinner("지휘관 목표치에 맞춰 최적화 배정 중..."):
+        with st.spinner("목표치에 맞춰 최적화 배정 중..."):
             if target_mode == "비율(%)로 설정": target_seosan_boxes = int(total_boxes * (target_val / 100.0))
             else: target_seosan_boxes = int(target_val)
                 
