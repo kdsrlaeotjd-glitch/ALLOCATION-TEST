@@ -12,7 +12,7 @@ import xlwt
 warnings.filterwarnings('ignore', category=UserWarning, module='openpyxl')
 
 # ==========================================================
-# 0. 구글 시트 통신 및 진짜 .xls 파일 생성 엔진 🤖 (에러 탐지기 장착)
+# 0. 구글 시트 통신 엔진 🤖 (구글 응답 추적기 장착)
 # ==========================================================
 def load_from_cloud():
     try:
@@ -23,7 +23,12 @@ def load_from_cloud():
         req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
         with urllib.request.urlopen(req, timeout=10) as response:
             data = response.read().decode('utf-8')
-            if data and data.strip():
+            
+            if not data or not data.strip():
+                st.error("🚨 구글이 텅 빈 데이터를 보냈습니다.")
+                return False
+                
+            try:
                 parsed = json.loads(data)
                 st.session_state['inventory_loaded'] = parsed.get('inventory_loaded', False)
                 st.session_state['stock_seosan'] = parsed.get('stock_seosan', {})
@@ -31,8 +36,11 @@ def load_from_cloud():
                 st.session_state['order_count'] = parsed.get('order_count', 0)
                 st.session_state['history'] = parsed.get('history', [])
                 return True
+            except json.JSONDecodeError:
+                st.error(f"🚨 구글 응답 해석 실패! 구글이 보낸 진짜 내용:\n{data[:500]}")
+                return False
     except Exception as e: 
-        st.error(f"🚨 DB 불러오기 실패: {e}") # 원인 화면 출력!
+        st.error(f"🚨 DB 통신 자체 실패: {e}")
     return False
 
 def save_to_cloud():
@@ -55,7 +63,7 @@ def save_to_cloud():
                 st.error(f"🚨 DB 저장 오류 응답: {res_text}")
             return "SUCCESS" in res_text
     except Exception as e: 
-        st.error(f"🚨 DB 저장 통신 실패: {e}") # 원인 화면 출력!
+        st.error(f"🚨 DB 저장 통신 실패: {e}") 
         return False
 
 def df_to_xls_bytes(df):
@@ -79,7 +87,7 @@ st.set_page_config(page_title="폴레드 주문분배 시스템", page_icon="�
 SIDEBAR_LOGO_URL = "https://cdn-pro-web-223-233.cdn-nhncommerce.com/poled0304_godomall_com/data/skin/front/db_poled_C/img/dimg/about_logo02.png"
 
 st.title("🍶 MADE BY DS ")
-st.caption("Seosan & Yongma Multi-Warehouse Engine (v9.3 - DB Debug Mode)")
+st.caption("Seosan & Yongma Multi-Warehouse Engine (v9.5 - Default Count Mode)")
 st.markdown("---")
 
 ALLOWED_8DIGIT_CODES = [
@@ -157,7 +165,7 @@ with st.sidebar:
         st.rerun()
 
 # ==========================================================
-# 4. 메인 화면 (배정 대시보드)
+# 4. 메인 화면 (지휘관 대시보드)
 # ==========================================================
 c1, c2 = st.columns(2)
 c1.info(f"🍶 **서산 잔여 품목:** {len(st.session_state['stock_seosan'])}개")
@@ -180,7 +188,7 @@ if 'latest_result' in st.session_state:
     res = st.session_state['latest_result']
     st.success(f"🎉 {res['order_cnt']}차 배정 완료! (서산 배정 목표 {res['target_seosan_boxes']}박스 중 {res['current_file_seosan_alloc']}박스 할당됨)")
     
-    st.markdown("### 💾 개별 결과 파일 다운로드")
+    st.markdown("### 💾 개별 결과 파일 다운로드 (클릭해도 창이 닫히지 않습니다)")
     d1, d2, d3, d4 = st.columns(4)
     with d1: st.download_button("🏢 서산창고 (.xls)", res['df_s_bytes'], f"{res['today_str']}_{res['order_cnt']}차_서산.xls", "application/vnd.ms-excel", use_container_width=True)
     with d2: st.download_button("🏢 용마창고 (.xls)", res['df_y_bytes'], f"{res['today_str']}_{res['order_cnt']}차_용마.xls", "application/vnd.ms-excel", use_container_width=True)
@@ -245,12 +253,15 @@ elif file_order:
         st.markdown("### 🎯 서산창고 배정 타겟 설정")
         st.caption("설정된 타겟만큼 **[단포 ➔ 동종합포 ➔ 이종합포]** 순서로 서산에 우선 배정, 나머지는 용마로 배정됩니다.")
         t_col1, t_col2 = st.columns(2)
-        with t_col1: target_mode = st.radio("설정 방식", ["비율(%)로 설정", "건수(박스)로 설정"], horizontal=True)
-        with t_col2: target_val = st.number_input("목표 값 입력 (비율은 %, 건수는 박스 수)", min_value=0, value=100, step=10)
+        
+        # 💡 [핵심 변경] 건수를 기본값으로, 비율을 두번째로 변경! 입력란 기본값은 총 박스수로 세팅!
+        with t_col1: target_mode = st.radio("설정 방식", ["건수(박스)로 설정", "비율(%)로 설정"], horizontal=True)
+        with t_col2: target_val = st.number_input("목표 값 입력 (건수는 박스 수, 비율은 %)", min_value=0, value=total_boxes, step=10)
+        
         submitted = st.form_submit_button("🚀 자동 분배 실행", type="primary")
 
     if submitted:
-        with st.spinner("목표치에 맞춰 최적화 배정 중..."):
+        with st.spinner("지휘관 목표치에 맞춰 최적화 배정 중..."):
             if target_mode == "비율(%)로 설정": target_seosan_boxes = int(total_boxes * (target_val / 100.0))
             else: target_seosan_boxes = int(target_val)
                 
@@ -360,4 +371,5 @@ elif file_order:
                 'order_cnt': st.session_state['order_count'],
                 'today_str': datetime.datetime.now(ZoneInfo("Asia/Seoul")).strftime("%m%d")
             }
-            st.rerun()
+            st.rerun() 
+print("app.py updated")
