@@ -12,7 +12,7 @@ import xlwt
 warnings.filterwarnings('ignore', category=UserWarning, module='openpyxl')
 
 # ==========================================================
-# 0. 구글 시트 통신 엔진 🤖
+# 0. 구글 시트 통신 엔진 🤖 
 # ==========================================================
 def load_from_cloud():
     try:
@@ -85,7 +85,7 @@ st.set_page_config(page_title="폴레드 주문분배 시스템", page_icon="�
 SIDEBAR_LOGO_URL = "https://cdn-pro-web-223-233.cdn-nhncommerce.com/poled0304_godomall_com/data/skin/front/db_poled_C/img/dimg/about_logo02.png"
 
 st.title("🍶 MADE BY DS ")
-st.caption("Seosan & Yongma Multi-Warehouse Engine (v9.6 - Undo / Rollback Feature)")
+st.caption("Seosan & Yongma Multi-Warehouse Engine (v9.7 - Rollback & Count Mode)")
 st.markdown("---")
 
 ALLOWED_8DIGIT_CODES = [
@@ -201,8 +201,6 @@ if 'latest_result' in st.session_state:
     with rc3: st.write("**🏢 용마**"); st.write(f"단포: `{res['y_stats']['단포']}` / 단수: `{res['y_stats']['단수합포']}` / 이종: `{res['y_stats']['이종합포']}`")
     
     st.markdown("---")
-    
-    # 💡 [핵심] 배정 확정 vs 배정 취소(롤백) 버튼 분리
     btn_col1, btn_col2 = st.columns(2)
     with btn_col1:
         if st.button("✅ 배정 확정 (다음 차수 준비)", type="primary", use_container_width=True):
@@ -214,7 +212,6 @@ if 'latest_result' in st.session_state:
     with btn_col2:
         if st.button("🔙 배정 취소 (결과 롤백 후 재배정)", type="secondary", use_container_width=True):
             if 'snapshot' in st.session_state:
-                # 스냅샷으로 재고와 히스토리 완벽 복원
                 st.session_state['stock_seosan'] = st.session_state['snapshot']['stock_seosan'].copy()
                 st.session_state['stock_yongma'] = st.session_state['snapshot']['stock_yongma'].copy()
                 st.session_state['history'] = st.session_state['snapshot']['history'].copy()
@@ -222,7 +219,7 @@ if 'latest_result' in st.session_state:
                 del st.session_state['snapshot']
             
             del st.session_state['latest_result']
-            save_to_cloud() # 복원된 상태를 DB에도 다시 덮어쓰기
+            save_to_cloud()
             st.toast("🔙 배정이 취소되고 재고가 원래대로 복구되었습니다!", icon="🔄")
             st.rerun()
 
@@ -279,7 +276,6 @@ elif file_order:
     if submitted:
         with st.spinner("지휘관 목표치에 맞춰 최적화 배정 중..."):
             
-            # 💡 [핵심] 배정 실행 직전, 현재 상태를 스냅샷(백업)으로 저장
             st.session_state['snapshot'] = {
                 'stock_seosan': st.session_state['stock_seosan'].copy(),
                 'stock_yongma': st.session_state['stock_yongma'].copy(),
