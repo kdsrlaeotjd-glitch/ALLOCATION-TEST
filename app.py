@@ -12,34 +12,29 @@ import xlwt
 warnings.filterwarnings('ignore', category=UserWarning, module='openpyxl')
 
 # ==========================================================
-# 0. 구글 시트 통신 엔진 🤖 
+# 0. 구글 시트 통신 엔진 🤖 (보류재고 전송 기능 추가)
 # ==========================================================
 def load_from_cloud():
     try:
         if "WEB_APP_URL" not in st.secrets: 
-            st.warning("⚠️ Secrets에 WEB_APP_URL이 없습니다. (저장 기능 꺼짐)")
             return False
         url = st.secrets["WEB_APP_URL"]
         req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
         with urllib.request.urlopen(req, timeout=10) as response:
             data = response.read().decode('utf-8')
-            if not data or not data.strip():
-                st.error("🚨 구글이 텅 빈 데이터를 보냈습니다.")
-                return False
+            if not data or not data.strip(): return False
             try:
                 parsed = json.loads(data)
                 st.session_state['inventory_loaded'] = parsed.get('inventory_loaded', False)
                 st.session_state['stock_seosan'] = parsed.get('stock_seosan', {})
+                st.session_state['hold_seosan'] = parsed.get('hold_seosan', {})
                 st.session_state['stock_yongma'] = parsed.get('stock_yongma', {})
+                st.session_state['hold_yongma'] = parsed.get('hold_yongma', {})
                 st.session_state['order_count'] = parsed.get('order_count', 0)
                 st.session_state['history'] = parsed.get('history', [])
                 return True
-            except json.JSONDecodeError:
-                st.error(f"🚨 구글 응답 해석 실패! 구글이 보낸 진짜 내용:\n{data[:500]}")
-                return False
-    except Exception as e: 
-        st.error(f"🚨 DB 통신 자체 실패: {e}")
-    return False
+            except json.JSONDecodeError: return False
+    except Exception: return False
 
 def save_to_cloud():
     try:
@@ -48,7 +43,9 @@ def save_to_cloud():
         data = {
             'inventory_loaded': st.session_state.get('inventory_loaded', False),
             'stock_seosan': {str(k): int(v) for k, v in st.session_state.get('stock_seosan', {}).items()},
+            'hold_seosan': {str(k): int(v) for k, v in st.session_state.get('hold_seosan', {}).items()},
             'stock_yongma': {str(k): int(v) for k, v in st.session_state.get('stock_yongma', {}).items()},
+            'hold_yongma': {str(k): int(v) for k, v in st.session_state.get('hold_yongma', {}).items()},
             'order_count': int(st.session_state.get('order_count', 0)),
             'history': st.session_state.get('history', []),
             'last_updated': datetime.datetime.now(ZoneInfo("Asia/Seoul")).strftime("%Y-%m-%d %H:%M:%S")
@@ -57,18 +54,13 @@ def save_to_cloud():
         req = urllib.request.Request(url, data=json_payload, headers={'Content-Type': 'text/plain;charset=utf-8'})
         with urllib.request.urlopen(req, timeout=10) as response:
             res_text = response.read().decode('utf-8')
-            if "SUCCESS" not in res_text:
-                st.error(f"🚨 DB 저장 오류 응답: {res_text}")
             return "SUCCESS" in res_text
-    except Exception as e: 
-        st.error(f"🚨 DB 저장 통신 실패: {e}") 
-        return False
+    except Exception: return False
 
 def df_to_xls_bytes(df):
     wb = xlwt.Workbook(encoding='utf-8')
     ws = wb.add_sheet('Sheet1')
-    for col_idx, col_name in enumerate(df.columns):
-        ws.write(0, col_idx, str(col_name))
+    for col_idx, col_name in enumerate(df.columns): ws.write(0, col_idx, str(col_name))
     for row_idx, row in enumerate(df.itertuples(index=False)):
         for col_idx, val in enumerate(row):
             if pd.isna(val) or val == "": ws.write(row_idx + 1, col_idx, "")
@@ -85,7 +77,7 @@ st.set_page_config(page_title="폴레드 주문분배 시스템", page_icon="�
 SIDEBAR_LOGO_URL = "https://cdn-pro-web-223-233.cdn-nhncommerce.com/poled0304_godomall_com/data/skin/front/db_poled_C/img/dimg/about_logo02.png"
 
 st.title("🍶 MADE BY DS ")
-st.caption("Seosan & Yongma Multi-Warehouse Engine (v9.7 - Rollback & Count Mode)")
+st.caption("Seosan & Yongma Multi-Warehouse Engine (v9.8 - Hold & CS Inventory Tracking)")
 st.markdown("---")
 
 ALLOWED_8DIGIT_CODES = [
@@ -120,7 +112,9 @@ def get_pack_stats(df):
 if 'inventory_loaded' not in st.session_state:
     st.session_state['inventory_loaded'] = False
     st.session_state['stock_seosan'] = {}
+    st.session_state['hold_seosan'] = {}
     st.session_state['stock_yongma'] = {}
+    st.session_state['hold_yongma'] = {}
     st.session_state['order_count'] = 0
     st.session_state['history'] = []
     if load_from_cloud(): st.toast("☁️ 마지막 작업 상태를 불러왔습니다!", icon="✅")
@@ -138,21 +132,30 @@ with st.sidebar:
     
     if st.button("📥 재고 확정", type="primary", disabled=is_disabled) and file_seosan and file_yongma:
         try:
-            df_s = pd.read_excel(file_seosan, usecols="B,L", engine='xlrd' if file_seosan.name.endswith('.xls') else None)
-            df_s.columns = ['제품코드', '재고수량']
+            # 💡 [핵심] 서산재고: B(코드), H(창고정보), L(재고수량) 분류
+            df_s = pd.read_excel(file_seosan, usecols="B,H,L", engine='xlrd' if file_seosan.name.endswith('.xls') else None)
+            df_s.columns = ['제품코드', '창고정보', '재고수량']
             df_s['제품코드'] = clean_product_code(df_s['제품코드'])
             df_s['재고수량'] = pd.to_numeric(df_s['재고수량'], errors='coerce').fillna(0)
-            st.session_state['stock_seosan'] = df_s[df_s['제품코드'] != ""].groupby('제품코드')['재고수량'].sum().to_dict()
             
-            df_y = pd.read_excel(file_yongma, usecols="B,H", engine='xlrd' if file_yongma.name.endswith('.xls') else None)
-            df_y.columns = ['제품코드', '재고수량']
+            is_s_avail = df_s['창고정보'].astype(str).str.contains('01', na=False)
+            is_s_hold = df_s['창고정보'].astype(str).str.contains('04|05', na=False)
+            
+            st.session_state['stock_seosan'] = df_s[is_s_avail & (df_s['제품코드'] != "")].groupby('제품코드')['재고수량'].sum().to_dict()
+            st.session_state['hold_seosan'] = df_s[is_s_hold & (df_s['제품코드'] != "")].groupby('제품코드')['재고수량'].sum().to_dict()
+            
+            # 💡 [핵심] 용마재고: B(코드), H(가용재고), J(보류수량) 분류
+            df_y = pd.read_excel(file_yongma, usecols="B,H,J", engine='xlrd' if file_yongma.name.endswith('.xls') else None)
+            df_y.columns = ['제품코드', '재고수량', '보류수량']
             df_y['제품코드'] = clean_product_code(df_y['제품코드'])
             df_y['재고수량'] = pd.to_numeric(df_y['재고수량'], errors='coerce').fillna(0)
+            df_y['보류수량'] = pd.to_numeric(df_y['보류수량'], errors='coerce').fillna(0)
+            
             st.session_state['stock_yongma'] = df_y[df_y['제품코드'] != ""].groupby('제품코드')['재고수량'].sum().to_dict()
+            st.session_state['hold_yongma'] = df_y[df_y['제품코드'] != ""].groupby('제품코드')['보류수량'].sum().to_dict()
             
             st.session_state['inventory_loaded'] = True
-            if save_to_cloud():
-                st.toast("✅ 구글 시트 저장 성공!", icon="☁️")
+            if save_to_cloud(): st.toast("✅ 구글 시트 저장 성공!", icon="☁️")
             st.rerun()
         except Exception as e: st.error(f"⚠️ 재고 로딩 에러: {e}")
                 
@@ -166,8 +169,8 @@ with st.sidebar:
 # 4. 메인 화면 (지휘관 대시보드)
 # ==========================================================
 c1, c2 = st.columns(2)
-c1.info(f"🍶 **서산 잔여 품목:** {len(st.session_state['stock_seosan'])}개")
-c2.info(f"🍶 **용마 잔여 품목:** {len(st.session_state['stock_yongma'])}개")
+c1.info(f"🍶 **서산 가용 품목:** {len(st.session_state['stock_seosan'])}개 (보류별도)")
+c2.info(f"🍶 **용마 가용 품목:** {len(st.session_state['stock_yongma'])}개 (보류별도)")
 
 if not st.session_state['inventory_loaded']:
     st.warning("👈 좌측에서 재고를 먼저 등록해주세요.")
@@ -205,15 +208,16 @@ if 'latest_result' in st.session_state:
     with btn_col1:
         if st.button("✅ 배정 확정 (다음 차수 준비)", type="primary", use_container_width=True):
             del st.session_state['latest_result']
-            if 'snapshot' in st.session_state:
-                del st.session_state['snapshot']
+            if 'snapshot' in st.session_state: del st.session_state['snapshot']
             st.rerun()
             
     with btn_col2:
         if st.button("🔙 배정 취소 (결과 롤백 후 재배정)", type="secondary", use_container_width=True):
             if 'snapshot' in st.session_state:
                 st.session_state['stock_seosan'] = st.session_state['snapshot']['stock_seosan'].copy()
+                st.session_state['hold_seosan'] = st.session_state['snapshot']['hold_seosan'].copy()
                 st.session_state['stock_yongma'] = st.session_state['snapshot']['stock_yongma'].copy()
+                st.session_state['hold_yongma'] = st.session_state['snapshot']['hold_yongma'].copy()
                 st.session_state['history'] = st.session_state['snapshot']['history'].copy()
                 st.session_state['order_count'] = st.session_state['snapshot']['order_count']
                 del st.session_state['snapshot']
@@ -275,10 +279,11 @@ elif file_order:
 
     if submitted:
         with st.spinner("지휘관 목표치에 맞춰 최적화 배정 중..."):
-            
             st.session_state['snapshot'] = {
                 'stock_seosan': st.session_state['stock_seosan'].copy(),
+                'hold_seosan': st.session_state['hold_seosan'].copy(),
                 'stock_yongma': st.session_state['stock_yongma'].copy(),
+                'hold_yongma': st.session_state['hold_yongma'].copy(),
                 'history': st.session_state['history'].copy(),
                 'order_count': st.session_state['order_count']
             }
@@ -294,6 +299,7 @@ elif file_order:
                 else: return 3
             ordered_groups.sort(key=sort_key)
             
+            # 배정은 철저히 가용 재고(temp_s, temp_y)로만 진행됨
             temp_s = st.session_state['stock_seosan'].copy()
             temp_y = st.session_state['stock_yongma'].copy()
             results_map = {}
